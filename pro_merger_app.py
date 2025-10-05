@@ -11,6 +11,7 @@ class ProExcelMergerApp:
         self.expense_file_path = tk.StringVar()
         self.revenue_file_path = tk.StringVar()
         self.output_file_path = tk.StringVar()
+        self.key_columns = ['Job ID', 'Cost Code ID', 'Phase ID']
 
         # Main frame
         frame = tk.Frame(root, padx=10, pady=10)
@@ -86,8 +87,17 @@ class ProExcelMergerApp:
             tk.Button(self.col_config_window, text="Down", command=self.move_down).grid(row=1, column=1, padx=5, pady=2, sticky='ew')
             tk.Button(self.col_config_window, text="Rename", command=self.rename_column).grid(row=2, column=1, padx=5, pady=2, sticky='ew')
             tk.Button(self.col_config_window, text="Remove", command=self.remove_column).grid(row=3, column=1, padx=5, pady=2, sticky='ew')
-            
-            tk.Button(self.col_config_window, text="Combine and Save", command=self.combine_and_save).grid(row=5, column=0, columnspan=2, pady=10)
+
+            self.key_columns_label = tk.Label(self.col_config_window, text=f"Keys: {self.key_columns}")
+            self.key_columns_label.grid(row=4, column=0, padx=5, pady=5, sticky='w')
+
+            key_col_button = tk.Button(self.col_config_window, text="Select Key Columns", command=self.select_key_columns)
+            key_col_button.grid(row=5, column=0, padx=5, pady=5, sticky='ew')
+
+            reset_keys_button = tk.Button(self.col_config_window, text="Reset Keys", command=self.reset_key_columns)
+            reset_keys_button.grid(row=5, column=1, padx=5, pady=5, sticky='ew')
+
+            tk.Button(self.col_config_window, text="Combine and Save", command=self.combine_and_save).grid(row=6, column=0, columnspan=2, pady=10)
 
         except Exception as e:
             messagebox.showerror("Error", f"Could not read files: {e}")
@@ -139,14 +149,42 @@ class ProExcelMergerApp:
         except IndexError:
             messagebox.showwarning("Warning", "Please select a column to remove.", parent=self.col_config_window)
 
+    def select_key_columns(self):
+        common_columns = sorted(list(set(self.df_expense.columns) & set(self.df_revenue.columns)))
+        
+        select_window = tk.Toplevel(self.col_config_window)
+        select_window.title("Select Key Columns")
+        
+        listbox = tk.Listbox(select_window, selectmode=tk.MULTIPLE, width=40, height=15)
+        for col in common_columns:
+            listbox.insert(tk.END, col)
+            if col in self.key_columns:
+                listbox.selection_set(tk.END)
+        listbox.pack(padx=10, pady=10)
+
+        def on_ok():
+            selected_indices = listbox.curselection()
+            self.key_columns = [listbox.get(i) for i in selected_indices]
+            self.key_columns_label.config(text=f"Keys: {self.key_columns}")
+            select_window.destroy()
+
+        tk.Button(select_window, text="OK", command=on_ok).pack(pady=5)
+
+    def reset_key_columns(self):
+        self.key_columns = ['Job ID', 'Cost Code ID', 'Phase ID']
+        self.key_columns_label.config(text=f"Keys: {self.key_columns}")
+
     def combine_and_save(self):
         try:
-            key_cols = ['Job ID', 'Cost Code ID', 'Phase ID']
-            if not all(col in self.df_expense.columns and col in self.df_revenue.columns for col in key_cols):
-                 messagebox.showerror("Error", f"Both files must contain the key columns: {key_cols}", parent=self.col_config_window)
+            if not self.key_columns:
+                messagebox.showerror("Error", "Please select at least one key column.", parent=self.col_config_window)
+                return
+
+            if not all(col in self.df_expense.columns and col in self.df_revenue.columns for col in self.key_columns):
+                 messagebox.showerror("Error", f"Both files must contain the key columns: {self.key_columns}", parent=self.col_config_window)
                  return
 
-            merged_df = pd.merge(self.df_expense, self.df_revenue, on=key_cols, how='outer')
+            merged_df = pd.merge(self.df_expense, self.df_revenue, on=self.key_columns, how='outer')
 
             final_df = merged_df[self.original_columns]
             
