@@ -34,5 +34,9 @@
         "Phase ID"
     ],
     "required_column": "Cost Code ID",
-    "phase_id_criteria": "Supervision"
+    "phase_id_criteria": "Supervision",
+    "calculation_columns": {
+        "actual": "Act. Expenses",
+        "estimated": "Est. Expenses"
+    }
 }

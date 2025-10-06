@@ -51,7 +51,10 @@ class ProExcelMergerApp:
 
         # Next button
         self.next_button = tk.Button(root, text="Configure Columns", command=self.open_column_config, state=tk.DISABLED)
-        self.next_button.pack(pady=10)
+        self.next_button.pack(side=tk.LEFT, padx=10, pady=10)
+
+        self.go_button = tk.Button(root, text="Go", command=self.go_process, state=tk.DISABLED)
+        self.go_button.pack(side=tk.RIGHT, padx=10, pady=10)
 
     def create_menu(self):
         menubar = tk.Menu(self.root)
@@ -135,8 +138,19 @@ class ProExcelMergerApp:
     def check_inputs(self, *args):
         if self.expense_file_path.get() and self.revenue_file_path.get() and self.output_file_path.get():
             self.next_button.config(state=tk.NORMAL)
+            self.go_button.config(state=tk.NORMAL)
         else:
             self.next_button.config(state=tk.DISABLED)
+            self.go_button.config(state=tk.DISABLED)
+
+    def go_process(self):
+        try:
+            self.load_app_configuration()
+            self.df_expense = pd.read_excel(self.expense_file_path.get())
+            self.df_revenue = pd.read_excel(self.revenue_file_path.get())
+            self.combine_and_save(parent_window=self.root)
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred: {e}", parent=self.root)
 
     def open_column_config(self):
         try:
@@ -357,7 +371,8 @@ class ProExcelMergerApp:
             'rename_map': self.rename_map,
             'key_columns': self.key_columns,
             'required_column': self.required_column,
-            'phase_id_criteria': self.phase_id_criteria.get()
+            'phase_id_criteria': self.phase_id_criteria.get(),
+            'calculation_columns': self.calculation_columns
         }
         with open(self.config_file, 'w') as f:
             json.dump(config_data, f, indent=4)
@@ -372,6 +387,7 @@ class ProExcelMergerApp:
                 self.key_columns = config_data.get('key_columns', ['Job ID', 'Cost Code ID', 'Phase ID'])
                 self.required_column = config_data.get('required_column', None)
                 self.phase_id_criteria.set(config_data.get('phase_id_criteria', ""))
+                self.calculation_columns = config_data.get('calculation_columns', {})
             if hasattr(self, 'listbox'):
                 self.update_listbox()
             if hasattr(self, 'key_columns_label'):
@@ -390,10 +406,13 @@ class ProExcelMergerApp:
         self.key_columns_label.config(text=f"Keys: {self.key_columns}")
         self.required_column_label.config(text=f"Required Column: {self.required_column if self.required_column else 'None'}")
         messagebox.showinfo("Success", "Configuration reset to default.")
-    def combine_and_save(self):
+        
+    def combine_and_save(self, parent_window=None):
+        if parent_window is None:
+            parent_window = self.col_config_window
         try:
             if not self.key_columns:
-                messagebox.showerror("Error", "Please select at least one key column.", parent=self.col_config_window)
+                messagebox.showerror("Error", "Please select at least one key column.", parent=parent_window)
                 return
 
             if self.required_column:
@@ -401,7 +420,7 @@ class ProExcelMergerApp:
                 self.df_revenue.dropna(subset=[self.required_column], inplace=True)
 
             if not all(col in self.df_expense.columns and col in self.df_revenue.columns for col in self.key_columns):
-                 messagebox.showerror("Error", f"Both files must contain the key columns: {self.key_columns}", parent=self.col_config_window)
+                 messagebox.showerror("Error", f"Both files must contain the key columns: {self.key_columns}", parent=parent_window)
                  return
 
             merged_df = pd.merge(self.df_expense, self.df_revenue, on=self.key_columns, how='outer')
@@ -470,10 +489,11 @@ class ProExcelMergerApp:
             final_df.to_csv(csv_output_path, index=False)
 
             messagebox.showinfo("Success", f"Combined file saved to {self.output_file_path.get()}")
-            self.col_config_window.destroy()
+            if hasattr(self, 'col_config_window') and self.col_config_window:
+                self.col_config_window.destroy()
 
         except Exception as e:
-            messagebox.showerror("Error", f"An error occurred during merging: {e}", parent=self.col_config_window)
+            messagebox.showerror("Error", f"An error occurred during merging: {e}", parent=parent_window)
 
 if __name__ == "__main__":
     root = tk.Tk()
