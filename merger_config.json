@@ -9,7 +9,8 @@
         "Diff. Expenses",
         "Est. Revenue",
         "Act. Revenue",
-        "Diff. Revenue"
+        "Diff. Revenue",
+        "Percent Complete"
     ],
     "rename_map": {
         "Act. Exp. Units": "Act. Exp. Units",
@@ -24,12 +25,14 @@
         "Est. Revenue": "Est. Revenue",
         "Job ID": "Job ID",
         "Phase Description": "Phase Description",
-        "Phase ID": "Phase ID"
+        "Phase ID": "Phase ID",
+        "Percent Complete": "Percent Complete"
     },
     "key_columns": [
         "Job ID",
         "Cost Code ID",
         "Phase ID"
     ],
-    "required_column": "Cost Code ID"
+    "required_column": "Cost Code ID",
+    "phase_id_criteria": "Supervision"
 }

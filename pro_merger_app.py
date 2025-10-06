@@ -1,10 +1,12 @@
-
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 import pandas as pd
 from PIL import Image, ImageTk
 import webbrowser
 import json
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill
+from openpyxl.formatting.rule import CellIsRule
 
 class ProExcelMergerApp:
     def __init__(self, root):
@@ -18,8 +20,10 @@ class ProExcelMergerApp:
         self.required_column = None
         self.original_columns = []
         self.rename_map = {}
+        self.calculation_columns = {}
+        self.phase_id_criteria = tk.StringVar()
         self.config_file = 'merger_config.json'
-        self.version = "1.1.1"
+        self.version = "1.2.0"
 
         self.create_menu()
 
@@ -139,12 +143,6 @@ class ProExcelMergerApp:
             self.df_expense = pd.read_excel(self.expense_file_path.get())
             self.df_revenue = pd.read_excel(self.revenue_file_path.get())
 
-            if not self.original_columns:
-                self.original_columns = sorted(list(set(self.df_expense.columns) | set(self.df_revenue.columns)))
-                self.rename_map = {col: col for col in self.original_columns}
-                self.default_original_columns = self.original_columns.copy()
-                self.default_rename_map = self.rename_map.copy()
-
             self.col_config_window = tk.Toplevel(self.root)
             self.col_config_window.title("Configure Columns")
 
@@ -152,18 +150,19 @@ class ProExcelMergerApp:
             list_frame.grid(row=0, column=0, padx=10, pady=10, rowspan=5)
 
             self.listbox = tk.Listbox(list_frame, selectmode=tk.SINGLE, width=40, height=15)
-            self.update_listbox()
-            self.listbox.pack(side=tk.LEFT, fill=tk.BOTH)
-
-            scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL)
-            scrollbar.config(command=self.listbox.yview)
+            self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            
+            scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.listbox.yview)
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             self.listbox.config(yscrollcommand=scrollbar.set)
 
-            tk.Button(self.col_config_window, text="Up", command=self.move_up).grid(row=0, column=1, padx=5, pady=2, sticky='ew')
-            tk.Button(self.col_config_window, text="Down", command=self.move_down).grid(row=1, column=1, padx=5, pady=2, sticky='ew')
-            tk.Button(self.col_config_window, text="Rename", command=self.rename_column).grid(row=2, column=1, padx=5, pady=2, sticky='ew')
-            tk.Button(self.col_config_window, text="Remove", command=self.remove_column).grid(row=3, column=1, padx=5, pady=2, sticky='ew')
+            btn_frame = tk.Frame(self.col_config_window)
+            btn_frame.grid(row=0, column=1, padx=5, pady=5, rowspan=5)
+
+            tk.Button(btn_frame, text="Up", command=self.move_up).pack(fill=tk.X)
+            tk.Button(btn_frame, text="Down", command=self.move_down).pack(fill=tk.X)
+            tk.Button(btn_frame, text="Rename", command=self.rename_column).pack(fill=tk.X)
+            tk.Button(btn_frame, text="Remove", command=self.remove_column).pack(fill=tk.X)
 
             self.key_columns_label = tk.Label(self.col_config_window, text=f"Keys: {self.key_columns}")
             self.key_columns_label.grid(row=5, column=0, padx=5, pady=5, sticky='w')
@@ -171,8 +170,8 @@ class ProExcelMergerApp:
             key_col_button = tk.Button(self.col_config_window, text="Select Key Columns", command=self.select_key_columns)
             key_col_button.grid(row=6, column=0, padx=5, pady=5, sticky='ew')
 
-            reset_keys_button = tk.Button(self.col_config_window, text="Reset Keys", command=self.reset_key_columns)
-            reset_keys_button.grid(row=6, column=1, padx=5, pady=5, sticky='ew')
+            reset_key_col_button = tk.Button(self.col_config_window, text="Reset Key Columns", command=self.reset_key_columns)
+            reset_key_col_button.grid(row=6, column=1, padx=5, pady=5, sticky='ew')
 
             self.required_column_label = tk.Label(self.col_config_window, text=f"Required Column: {self.required_column if self.required_column else 'None'}")
             self.required_column_label.grid(row=7, column=0, padx=5, pady=5, sticky='w')
@@ -183,11 +182,30 @@ class ProExcelMergerApp:
             reset_required_col_button = tk.Button(self.col_config_window, text="Reset Required Column", command=self.reset_required_column)
             reset_required_col_button.grid(row=8, column=1, padx=5, pady=5, sticky='ew')
 
-            tk.Button(self.col_config_window, text="Save Configuration", command=self.save_app_configuration).grid(row=9, column=0, padx=5, pady=5, sticky='ew')
-            tk.Button(self.col_config_window, text="Load Saved Configuration", command=self.load_app_configuration).grid(row=9, column=1, padx=5, pady=5, sticky='ew')
-            tk.Button(self.col_config_window, text="Reset to Default", command=self.reset_to_default).grid(row=10, column=0, columnspan=2, padx=5, pady=5, sticky='ew')
+            # Set default columns from dataframes
+            all_columns = sorted(list(set(self.df_expense.columns) | set(self.df_revenue.columns)))
+            self.original_columns = all_columns.copy()
+            self.rename_map = {col: col for col in all_columns}
+            self.update_listbox()
+
+            self.phase_id_criteria = tk.StringVar(self.col_config_window)
+            self.phase_id_criteria.set('Select Phase') # Set the default text
+
+            if 'Phase ID' in self.df_expense.columns:
+                phase_id_options = sorted([str(x) for x in self.df_expense['Phase ID'].unique()])
+                self.phase_id_criteria_menu = tk.OptionMenu(self.col_config_window, self.phase_id_criteria, *phase_id_options)
+                self.phase_id_criteria_menu.grid(row=9, column=0, padx=5, pady=5, sticky='ew')
+                # Remove the default text from the list of selectable options
+                self.phase_id_criteria_menu['menu'].delete(0)
+
+            add_percent_complete_button = tk.Button(self.col_config_window, text="Add Percent Complete", command=self.add_percent_complete_column)
+            add_percent_complete_button.grid(row=9, column=1, padx=5, pady=5, sticky='ew')
+
+            tk.Button(self.col_config_window, text="Save Configuration", command=self.save_app_configuration).grid(row=10, column=0, padx=5, pady=5, sticky='ew')
+            tk.Button(self.col_config_window, text="Load Saved Configuration", command=self.load_app_configuration).grid(row=10, column=1, padx=5, pady=5, sticky='ew')
 
             tk.Button(self.col_config_window, text="Combine and Save", command=self.combine_and_save).grid(row=11, column=0, columnspan=2, pady=10)
+
 
         except Exception as e:
             messagebox.showerror("Error", f"Could not read files: {e}")
@@ -292,12 +310,54 @@ class ProExcelMergerApp:
         self.required_column = None
         self.required_column_label.config(text=f"Required Column: None")
 
+    def add_percent_complete_column(self):
+        if 'Percent Complete' in self.original_columns:
+            messagebox.showinfo("Info", "'Percent Complete' column already added.", parent=self.col_config_window)
+            return
+
+        all_columns = sorted(list(set(self.df_expense.columns) | set(self.df_revenue.columns)))
+        
+        select_window = tk.Toplevel(self.col_config_window)
+        select_window.title("Configure Percent Complete")
+        
+        tk.Label(select_window, text="Actual Expenses Column (Numerator):").pack(padx=10, pady=5)
+        actual_listbox = tk.Listbox(select_window, selectmode=tk.SINGLE, width=40, height=10, exportselection=0)
+        for col in all_columns:
+            actual_listbox.insert(tk.END, col)
+        actual_listbox.pack(padx=10, pady=5)
+
+        tk.Label(select_window, text="Estimated Expenses Column (Denominator):").pack(padx=10, pady=5)
+        estimated_listbox = tk.Listbox(select_window, selectmode=tk.SINGLE, width=40, height=10, exportselection=0)
+        for col in all_columns:
+            estimated_listbox.insert(tk.END, col)
+        estimated_listbox.pack(padx=10, pady=5)
+
+        def on_ok():
+            actual_indices = actual_listbox.curselection()
+            estimated_indices = estimated_listbox.curselection()
+            if actual_indices and estimated_indices:
+                self.calculation_columns = {
+                    'actual': actual_listbox.get(actual_indices[0]),
+                    'estimated': estimated_listbox.get(estimated_indices[0])
+                }
+                if 'Percent Complete' not in self.original_columns:
+                    self.original_columns.append('Percent Complete')
+                    self.rename_map['Percent Complete'] = 'Percent Complete'
+                    self.update_listbox()
+                select_window.destroy()
+            else:
+                messagebox.showwarning("Warning", "Please select both an actual and an estimated column.", parent=select_window)
+
+        tk.Button(select_window, text="OK", command=on_ok).pack(pady=10)
+
+
     def save_app_configuration(self):
         config_data = {
             'original_columns': self.original_columns,
             'rename_map': self.rename_map,
             'key_columns': self.key_columns,
-            'required_column': self.required_column
+            'required_column': self.required_column,
+            'phase_id_criteria': self.phase_id_criteria.get()
         }
         with open(self.config_file, 'w') as f:
             json.dump(config_data, f, indent=4)
@@ -311,10 +371,13 @@ class ProExcelMergerApp:
                 self.rename_map = config_data.get('rename_map', {})
                 self.key_columns = config_data.get('key_columns', ['Job ID', 'Cost Code ID', 'Phase ID'])
                 self.required_column = config_data.get('required_column', None)
-            self.update_listbox()
-            self.key_columns_label.config(text=f"Keys: {self.key_columns}")
-            self.required_column_label.config(text=f"Required Column: {self.required_column if self.required_column else 'None'}")
-            messagebox.showinfo("Success", "Configuration loaded.")
+                self.phase_id_criteria.set(config_data.get('phase_id_criteria', ""))
+            if hasattr(self, 'listbox'):
+                self.update_listbox()
+            if hasattr(self, 'key_columns_label'):
+                self.key_columns_label.config(text=f"Keys: {self.key_columns}")
+            if hasattr(self, 'required_column_label'):
+                self.required_column_label.config(text=f"Required Column: {self.required_column if self.required_column else 'None'}")
         except FileNotFoundError:
             messagebox.showerror("Error", "No saved configuration file found.")
 
@@ -343,11 +406,68 @@ class ProExcelMergerApp:
 
             merged_df = pd.merge(self.df_expense, self.df_revenue, on=self.key_columns, how='outer')
 
+            if 'Percent Complete' in self.original_columns and self.calculation_columns and self.calculation_columns.get('actual') and self.calculation_columns.get('estimated'):
+                actual_col = self.calculation_columns['actual']
+                estimated_col = self.calculation_columns['estimated']
+                if actual_col in merged_df.columns and estimated_col in merged_df.columns:
+                    merged_df['Percent Complete'] = pd.to_numeric(merged_df[actual_col], errors='coerce') / pd.to_numeric(merged_df[estimated_col], errors='coerce')
+                    merged_df['Percent Complete'].fillna(0, inplace=True)
+                    merged_df['Percent Complete'].replace([float('inf'), float('-inf')], 0, inplace=True)
+
             final_df = merged_df[self.original_columns]
             
             final_df = final_df.rename(columns=self.rename_map)
 
-            final_df.to_excel(self.output_file_path.get(), index=False)
+            # Save to Excel with openpyxl for conditional formatting
+            wb = Workbook()
+            ws = wb.active
+            
+            # Get the column index for 'Percent Complete' before looping
+            percent_complete_col_idx = -1
+            if 'Percent Complete' in final_df.columns:
+                percent_complete_col_idx = list(final_df.columns).index('Percent Complete') + 1
+
+            # Write headers
+            for col_idx, col_name in enumerate(final_df.columns, 1):
+                ws.cell(row=1, column=col_idx, value=col_name)
+            
+            # Write data
+            for row_idx, row_data in enumerate(final_df.values, 2):
+                for col_idx, value in enumerate(row_data, 1):
+                    cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                    # If this is the 'Percent Complete' column, apply percentage formatting
+                    if col_idx == percent_complete_col_idx:
+                        cell.number_format = '0.00%'
+            
+            # Add conditional formatting if Percent Complete exists
+            if 'Percent Complete' in final_df.columns:
+                green_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+                red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+                
+                percent_complete_col_idx = list(final_df.columns).index('Percent Complete') + 1
+                col_letter = chr(ord('A') + percent_complete_col_idx - 1)
+                
+                # Get the supervisor percent complete
+                supervisor_percent_complete = 0
+                if self.phase_id_criteria.get() and self.phase_id_criteria.get() != 'Select Phase' and 'Phase ID' in final_df.columns and 'Percent Complete' in final_df.columns:
+                    supervisor_row = final_df[final_df['Phase ID'] == self.phase_id_criteria.get()]
+                    if not supervisor_row.empty:
+                        supervisor_percent_complete = supervisor_row['Percent Complete'].iloc[0]
+                
+                ws.conditional_formatting.add(
+                    f'{col_letter}2:{col_letter}{len(final_df) + 1}',
+                    CellIsRule(operator='lessThan', formula=[supervisor_percent_complete], fill=green_fill)
+                )
+                ws.conditional_formatting.add(
+                    f'{col_letter}2:{col_letter}{len(final_df) + 1}',
+                    CellIsRule(operator='greaterThan', formula=[supervisor_percent_complete], fill=red_fill)
+                )
+            
+            wb.save(self.output_file_path.get())
+            
+            # Save a CSV for debugging
+            csv_output_path = self.output_file_path.get().replace('.xlsx', '.csv')
+            final_df.to_csv(csv_output_path, index=False)
 
             messagebox.showinfo("Success", f"Combined file saved to {self.output_file_path.get()}")
             self.col_config_window.destroy()
