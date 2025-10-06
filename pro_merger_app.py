@@ -49,27 +49,25 @@ class ProExcelMergerApp:
         tk.Entry(self.main_frame, textvariable=self.output_file_path, width=50, state='readonly').grid(row=3, column=1, padx=5, pady=5)
         tk.Button(self.main_frame, text="Browse...", command=self.browse_output_file).grid(row=3, column=2, padx=5, pady=5)
 
-        # Next button
-        self.next_button = tk.Button(root, text="Configure Columns", command=self.open_column_config, state=tk.DISABLED)
-        self.next_button.pack(side=tk.LEFT, padx=10, pady=10)
-
+        # Go button
         self.go_button = tk.Button(root, text="Go", command=self.go_process, state=tk.DISABLED)
-        self.go_button.pack(side=tk.RIGHT, padx=10, pady=10)
+        self.go_button.pack(pady=10)
 
     def create_menu(self):
-        menubar = tk.Menu(self.root)
+        self.menubar = tk.Menu(self.root)
         
-        filemenu = tk.Menu(menubar, tearoff=0)
-        filemenu.add_command(label="Select Logo", command=self.select_logo_config)
-        filemenu.add_separator()
-        filemenu.add_command(label="Exit", command=self.root.quit)
-        menubar.add_cascade(label="File", menu=filemenu)
+        self.filemenu = tk.Menu(self.menubar, tearoff=0)
+        self.filemenu.add_command(label="Select Logo", command=self.select_logo_config)
+        self.filemenu.add_command(label="Configure Columns", command=self.open_column_config, state=tk.DISABLED)
+        self.filemenu.add_separator()
+        self.filemenu.add_command(label="Exit", command=self.root.quit)
+        self.menubar.add_cascade(label="File", menu=self.filemenu)
 
-        helpmenu = tk.Menu(menubar, tearoff=0)
+        helpmenu = tk.Menu(self.menubar, tearoff=0)
         helpmenu.add_command(label="About", command=self.show_about)
-        menubar.add_cascade(label="Help", menu=helpmenu)
+        self.menubar.add_cascade(label="Help", menu=helpmenu)
 
-        self.root.config(menu=menubar)
+        self.root.config(menu=self.menubar)
 
     def show_about(self):
         about_window = tk.Toplevel(self.root)
@@ -137,12 +135,13 @@ class ProExcelMergerApp:
 
     def check_inputs(self, *args):
         if self.expense_file_path.get() and self.revenue_file_path.get() and self.output_file_path.get():
-            self.next_button.config(state=tk.NORMAL)
             self.go_button.config(state=tk.NORMAL)
+            self.root.config(menu=self.menubar)
+            self.filemenu.entryconfig("Configure Columns", state=tk.NORMAL)
         else:
-            self.next_button.config(state=tk.DISABLED)
             self.go_button.config(state=tk.DISABLED)
-
+            if hasattr(self, 'filemenu'):
+                self.filemenu.entryconfig("Configure Columns", state=tk.DISABLED)
     def go_process(self):
         try:
             self.load_app_configuration()
