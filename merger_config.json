@@ -1,0 +1,35 @@
+{
+    "original_columns": [
+        "Job ID",
+        "Cost Code ID",
+        "Phase Description",
+        "Phase ID",
+        "Est. Expenses",
+        "Act. Expenses",
+        "Diff. Expenses",
+        "Est. Revenue",
+        "Act. Revenue",
+        "Diff. Revenue"
+    ],
+    "rename_map": {
+        "Act. Exp. Units": "Act. Exp. Units",
+        "Act. Expenses": "Act. Expenses",
+        "Act. Revenue": "Act. Revenue",
+        "Cost Code ID": "Cost Code ID",
+        "Diff. Exp. Units": "Diff. Exp. Units",
+        "Diff. Expenses": "Diff. Expenses",
+        "Diff. Revenue": "Diff. Revenue",
+        "Est. Exp. Units": "Est. Exp. Units",
+        "Est. Expenses": "Est. Expenses",
+        "Est. Revenue": "Est. Revenue",
+        "Job ID": "Job ID",
+        "Phase Description": "Phase Description",
+        "Phase ID": "Phase ID"
+    },
+    "key_columns": [
+        "Job ID",
+        "Cost Code ID",
+        "Phase ID"
+    ],
+    "required_column": "Cost Code ID"
+}

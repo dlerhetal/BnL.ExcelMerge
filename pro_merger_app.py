@@ -16,8 +16,9 @@ class ProExcelMergerApp:
         self.output_file_path = tk.StringVar()
         self.key_columns = ['Job ID', 'Cost Code ID', 'Phase ID']
         self.required_column = None
-        self.config_file = 'config.json'
-        self.config = self.load_config()
+        self.original_columns = []
+        self.rename_map = {}
+        self.config_file = 'merger_config.json'
         self.version = "1.1.1"
 
         self.create_menu()
@@ -27,8 +28,7 @@ class ProExcelMergerApp:
         self.main_frame.pack(padx=10, pady=10)
 
         # Add logo
-        logo_path = self.config.get('logo_path', "C:/Users/dale/OneDrive/Documents/ISI/BnL/Sage/Images/BnL.Logo.jpg")
-        self.set_logo(logo_path, self.main_frame)
+        self.set_logo("C:/Users/dale/OneDrive/Documents/ISI/BnL/Sage/Images/BnL.Logo.jpg", self.main_frame)
 
         # Expense file selection
         tk.Label(self.main_frame, text="Expense File:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
@@ -86,17 +86,6 @@ class ProExcelMergerApp:
         link.pack()
         link.bind("<Button-1>", lambda e: webbrowser.open_new("https://github.com/dlerhetal/BnL.ExcelMerge/releases"))
 
-    def load_config(self):
-        try:
-            with open(self.config_file, 'r') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return {}
-
-    def save_config(self):
-        with open(self.config_file, 'w') as f:
-            json.dump(self.config, f)
-
     def set_logo(self, logo_path, frame):
         try:
             logo_image = Image.open(logo_path)
@@ -110,7 +99,6 @@ class ProExcelMergerApp:
                 self.logo_label = tk.Label(frame, image=self.logo_photo)
                 self.logo_label.grid(row=0, column=0, columnspan=3, pady=10)
 
-            self.config['logo_path'] = logo_path
         except Exception as e:
             messagebox.showerror("Error", f"Could not load logo: {e}")
 
@@ -121,7 +109,6 @@ class ProExcelMergerApp:
         ])
         if filename:
             self.set_logo(filename, self.main_frame)
-            self.save_config()
 
     def browse_expense_file(self):
         filename = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
@@ -152,8 +139,11 @@ class ProExcelMergerApp:
             self.df_expense = pd.read_excel(self.expense_file_path.get())
             self.df_revenue = pd.read_excel(self.revenue_file_path.get())
 
-            self.original_columns = sorted(list(set(self.df_expense.columns) | set(self.df_revenue.columns)))
-            self.rename_map = {col: col for col in self.original_columns}
+            if not self.original_columns:
+                self.original_columns = sorted(list(set(self.df_expense.columns) | set(self.df_revenue.columns)))
+                self.rename_map = {col: col for col in self.original_columns}
+                self.default_original_columns = self.original_columns.copy()
+                self.default_rename_map = self.rename_map.copy()
 
             self.col_config_window = tk.Toplevel(self.root)
             self.col_config_window.title("Configure Columns")
@@ -193,7 +183,11 @@ class ProExcelMergerApp:
             reset_required_col_button = tk.Button(self.col_config_window, text="Reset Required Column", command=self.reset_required_column)
             reset_required_col_button.grid(row=8, column=1, padx=5, pady=5, sticky='ew')
 
-            tk.Button(self.col_config_window, text="Combine and Save", command=self.combine_and_save).grid(row=9, column=0, columnspan=2, pady=10)
+            tk.Button(self.col_config_window, text="Save Configuration", command=self.save_app_configuration).grid(row=9, column=0, padx=5, pady=5, sticky='ew')
+            tk.Button(self.col_config_window, text="Load Saved Configuration", command=self.load_app_configuration).grid(row=9, column=1, padx=5, pady=5, sticky='ew')
+            tk.Button(self.col_config_window, text="Reset to Default", command=self.reset_to_default).grid(row=10, column=0, columnspan=2, padx=5, pady=5, sticky='ew')
+
+            tk.Button(self.col_config_window, text="Combine and Save", command=self.combine_and_save).grid(row=11, column=0, columnspan=2, pady=10)
 
         except Exception as e:
             messagebox.showerror("Error", f"Could not read files: {e}")
@@ -298,6 +292,41 @@ class ProExcelMergerApp:
         self.required_column = None
         self.required_column_label.config(text=f"Required Column: None")
 
+    def save_app_configuration(self):
+        config_data = {
+            'original_columns': self.original_columns,
+            'rename_map': self.rename_map,
+            'key_columns': self.key_columns,
+            'required_column': self.required_column
+        }
+        with open(self.config_file, 'w') as f:
+            json.dump(config_data, f, indent=4)
+        messagebox.showinfo("Success", "Configuration saved.")
+
+    def load_app_configuration(self):
+        try:
+            with open(self.config_file, 'r') as f:
+                config_data = json.load(f)
+                self.original_columns = config_data.get('original_columns', [])
+                self.rename_map = config_data.get('rename_map', {})
+                self.key_columns = config_data.get('key_columns', ['Job ID', 'Cost Code ID', 'Phase ID'])
+                self.required_column = config_data.get('required_column', None)
+            self.update_listbox()
+            self.key_columns_label.config(text=f"Keys: {self.key_columns}")
+            self.required_column_label.config(text=f"Required Column: {self.required_column if self.required_column else 'None'}")
+            messagebox.showinfo("Success", "Configuration loaded.")
+        except FileNotFoundError:
+            messagebox.showerror("Error", "No saved configuration file found.")
+
+    def reset_to_default(self):
+        self.original_columns = self.default_original_columns.copy()
+        self.rename_map = self.default_rename_map.copy()
+        self.key_columns = ['Job ID', 'Cost Code ID', 'Phase ID']
+        self.required_column = None
+        self.update_listbox()
+        self.key_columns_label.config(text=f"Keys: {self.key_columns}")
+        self.required_column_label.config(text=f"Required Column: {self.required_column if self.required_column else 'None'}")
+        messagebox.showinfo("Success", "Configuration reset to default.")
     def combine_and_save(self):
         try:
             if not self.key_columns:
