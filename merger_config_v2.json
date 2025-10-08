@@ -1,0 +1,59 @@
+{
+    "tab_order": [
+        "Job Summary",
+        "Job Revenue",
+        "Job Expenses",
+        "Job Transactions"
+    ],
+    "tab_configs": {
+        "Job Summary": {
+            "columns": [
+                "Job ID",
+                "Project Manager",
+                "Contract Amount",
+                "Amt Billed",
+                "Left To Bill",
+                "Amt Recvd",
+                "Left to Receive",
+                "Estimated Expenses",
+                "Actual Expenses",
+                "Expense Diff",
+                "Percent Complete"
+            ],
+            "renames": {}
+        },
+        "Job Revenue": {
+            "columns": [
+                "Job ID",
+                "Billed",
+                "Amt Recvd"
+            ],
+            "renames": {}
+        },
+        "Job Expenses": {
+            "columns": [
+                "Job ID",
+                "Cost Code ID",
+                "Phase Description",
+                "Phase ID",
+                "Est. Expenses",
+                "Actual Expenses",
+                "Percent Complete"
+            ],
+            "renames": {}
+        },
+        "Job Transactions": {
+            "columns": [
+                "Job ID",
+                "Cost Code ID",
+                "Phase Description",
+                "Phase ID",
+                "Date",
+                "Description",
+                "Amount"
+            ],
+            "renames": {}
+        }
+    },
+    "percent_complete_phase_id": "Supervision-Wages"
+}
