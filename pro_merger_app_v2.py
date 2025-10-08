@@ -20,7 +20,7 @@ class ProExcelMergerApp:
         self.output_file_path = tk.StringVar()
 
         self.config_file = 'merger_config_v2.json'
-        self.version = "2.0.0"
+        self.version = "2.0.1"
         self.tab_order = ['Job Summary', 'Job Revenue', 'Job Expenses', 'Job Transactions']
         self.tab_configs = {
             'Job Summary': {
@@ -483,8 +483,8 @@ class ProExcelMergerApp:
         }, inplace=True)
 
         # Calculations
-        df_summary['Left To Bill'] = df_summary['Contract Amount'] - df_summary['Amt Billed']
-        df_summary['Left to Receive'] = df_summary['Amt Billed'] - df_summary['Amt Recvd']
+        df_summary['Left To Bill'] = df_summary['Contract Amount'] + df_summary['Amt Billed']
+        df_summary['Left to Receive'] = df_summary['Amt Billed'] + df_summary['Amt Recvd']
         df_summary['Expense Diff'] = df_summary['Estimated Expenses'] - df_summary['Actual Expenses']
 
         return df_summary
