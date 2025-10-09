@@ -20,7 +20,7 @@ class ProExcelMergerApp:
         self.output_file_path = tk.StringVar()
 
         self.config_file = 'merger_config_v2.json'
-        self.version = "2.0.1"
+        self.version = "2.0.0"
         self.tab_order = ['Job Summary', 'Job Revenue', 'Job Expenses', 'Job Transactions']
         self.tab_configs = {
             'Job Summary': {
@@ -350,6 +350,8 @@ class ProExcelMergerApp:
         try:
             df_sales_journal = pd.read_excel(self.sales_journal_path.get())
             df_job_master = pd.read_excel(self.job_master_path.get())
+            if 'Unnamed: 0' in df_job_master.columns and 'Job ID' not in df_job_master.columns:
+                df_job_master.rename(columns={'Unnamed: 0': 'Job ID'}, inplace=True)
             df_job_ledger = pd.read_excel(self.job_ledger_path.get())
             df_job_estimates = pd.read_excel(self.job_estimates_path.get())
 
@@ -430,6 +432,8 @@ class ProExcelMergerApp:
     def _generate_revenue_df(self, df_sales_journal, df_job_ledger):
         df = df_sales_journal.copy()
         df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+        if 'Amount' in df.columns and 'Billed' not in df.columns:
+            df.rename(columns={'Amount': 'Billed'}, inplace=True)
         return df
 
     def _generate_expenses_df(self, df_job_estimates, df_job_ledger):
@@ -483,8 +487,8 @@ class ProExcelMergerApp:
         }, inplace=True)
 
         # Calculations
-        df_summary['Left To Bill'] = df_summary['Contract Amount'] + df_summary['Amt Billed']
-        df_summary['Left to Receive'] = df_summary['Amt Billed'] + df_summary['Amt Recvd']
+        df_summary['Left To Bill'] = df_summary['Contract Amount'] - df_summary['Amt Billed']
+        df_summary['Left to Receive'] = df_summary['Amt Billed'] - df_summary['Amt Recvd']
         df_summary['Expense Diff'] = df_summary['Estimated Expenses'] - df_summary['Actual Expenses']
 
         return df_summary
