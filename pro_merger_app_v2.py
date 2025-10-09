@@ -6,6 +6,7 @@ import webbrowser
 import json
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, NamedStyle
+import numpy as np
 
 class ProExcelMergerApp:
     def __init__(self, root):
@@ -324,6 +325,7 @@ class ProExcelMergerApp:
                 # self.filemenu.entryconfig("Configure Columns", state=tk.DISABLED)
 
     def clean_job_ledger(self, df):
+        df.replace('', np.nan, inplace=True)
         # Forward fill missing values in specified columns
         df['Job ID'].fillna(method='ffill', inplace=True)
         df['Cost Code ID'].fillna(method='ffill', inplace=True)
@@ -337,6 +339,7 @@ class ProExcelMergerApp:
         df = df[~df['Job ID'].astype(str).str.contains('Total', na=False)]
         df = df[~df['Job ID'].astype(str).str.contains('Report', na=False)]
         df = df[~df['Trans Description'].astype(str).str.contains('Total', na=False)]
+        df = df[df['Phase ID'] != 'Total']
 
         return df
 
@@ -349,6 +352,8 @@ class ProExcelMergerApp:
     def go_process(self):
         try:
             df_sales_journal = pd.read_excel(self.sales_journal_path.get())
+            df_sales_journal.dropna(subset=['Job ID'], inplace=True)
+            df_sales_journal.to_csv('debug_sales_journal.csv', index=False)
             df_job_master = pd.read_excel(self.job_master_path.get())
             if 'Unnamed: 0' in df_job_master.columns and 'Job ID' not in df_job_master.columns:
                 df_job_master.rename(columns={'Unnamed: 0': 'Job ID'}, inplace=True)
@@ -401,21 +406,21 @@ class ProExcelMergerApp:
                     output_df = output_df.rename(columns=config['renames'])
                     configured_dfs[tab_name] = output_df
 
-            # --- 3. Save to Excel ---
+            # --- 3. Save to CSV for debugging ---
+            for tab_name, df in configured_dfs.items():
+                df.to_csv(f'{tab_name.replace(" ", "_").lower()}_debug.csv', index=False)
+
+            # --- 4. Save to Excel ---
             output_path = self.output_file_path.get()
             with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
                 for tab_name, df in configured_dfs.items():
                     df.to_excel(writer, sheet_name=tab_name, index=False)
 
-            # --- 4. ADD HYPERLINKS AND FORMATTING ---
+            # --- 5. ADD HYPERLINKS AND FORMATTING ---
             wb = load_workbook(output_path)
             self._add_hyperlinks(wb, configured_dfs.get('Job Summary'), configured_dfs.get('Job Expenses'), configured_dfs.get('Job Revenue'), configured_dfs.get('Job Transactions'))
             self._apply_formatting(wb, configured_dfs)
             wb.save(output_path)
-
-            # --- 5. TEMPORARY CSV EXPORT ---
-            for tab_name, df in configured_dfs.items():
-                df.to_csv(output_path.replace('.xlsx', f'_{tab_name.replace(" ", "_").lower()}.csv'), index=False)
 
             messagebox.showinfo("Success", f"Combined file saved to {output_path}")
 
@@ -427,6 +432,7 @@ class ProExcelMergerApp:
         df_transactions['Amount'] = df_transactions['Credit Amt'] - df_transactions['Debit Amt']
         df_transactions = df_transactions[['Job ID', 'Cost Code ID', 'Phase Description', 'Phase ID', 'Trx Date', 'Trans Description', 'Amount']]
         df_transactions.rename(columns={'Trx Date': 'Date', 'Trans Description': 'Description'}, inplace=True)
+        df_transactions['Date'] = pd.to_datetime(df_transactions['Date']).dt.date
         return df_transactions
 
     def _generate_revenue_df(self, df_sales_journal, df_job_ledger):
@@ -487,8 +493,9 @@ class ProExcelMergerApp:
         }, inplace=True)
 
         # Calculations
-        df_summary['Left To Bill'] = df_summary['Contract Amount'] - df_summary['Amt Billed']
-        df_summary['Left to Receive'] = df_summary['Amt Billed'] - df_summary['Amt Recvd']
+        df_summary['Left To Bill'] = df_summary['Contract Amount'] - df_summary['Amt Billed'].abs()
+        df_summary.loc[df_summary['Contract Amount'] == 0, 'Left To Bill'] = pd.NA
+        df_summary['Left to Receive'] = df_summary['Amt Billed'].abs() - df_summary['Amt Recvd']
         df_summary['Expense Diff'] = df_summary['Estimated Expenses'] - df_summary['Actual Expenses']
 
         return df_summary

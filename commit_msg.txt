@@ -1,0 +1,26 @@
+feat: Implement configurable multi-tab reports
+
+This commit introduces a major architectural change to the application, moving from a single, fixed-format report to a highly configurable, multi-tab report generator.
+
+The key features of this update include:
+
+- **Multi-Tab Configuration:** A new "Configure Report" window allows users to manage the settings for each of the four output tabs (`Job Summary`, `Job Revenue`, `Job Expenses`, `Job Transactions`) independently.
+
+- **Column Management:** For each tab, users can now:
+  - Reorder columns using "Up" and "Down" buttons.
+  - Rename column headers to their preference.
+  - Remove columns they don't want to see in the report.
+
+- **Tab Order Management:** The user can now control the order of the tabs in the final Excel file.
+
+- **Flexible Configuration:** All these settings are saved to a new, more structured `merger_config_v2.json` file, which is loaded at startup.
+
+- **Dynamic Report Generation:** The report generation logic has been completely overhauled to be fully dynamic, building the report based on the user's saved configuration.
+
+- **Bug Fixes and Data Cleaning:** This commit also includes numerous bug fixes and data cleaning improvements identified in previous sessions, including:
+  - Restored missing hyperlinks.
+  - Fixed data loss issues in the `JobRevenue` and `JobTransactions` tabs.
+  - Corrected currency formatting for negative numbers.
+  - Removed unwanted "report rows", "total rows", and "unnamed columns" from the output.
+
+This major update provides a significant increase in flexibility and user control, allowing for the creation of highly customized reports.

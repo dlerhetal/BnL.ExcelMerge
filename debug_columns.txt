@@ -1,0 +1,11 @@
+df_job_master columns:
+Index(['Unnamed: 0', 'Project Manager', 'Contract Amount'], dtype='object')
+
+df_revenue columns:
+Index(['Job ID', 'Amount', 'Amt Recvd', 'Billed'], dtype='object')
+
+df_expenses columns:
+Index(['Job ID', 'Cost Code ID', 'Phase Description', 'Phase ID',
+       'Est. Expenses', 'Actual Expenses', 'Percent Complete'],
+      dtype='object')
+
