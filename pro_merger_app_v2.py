@@ -433,6 +433,7 @@ class ProExcelMergerApp:
         df_transactions = df_transactions[['Job ID', 'Cost Code ID', 'Phase Description', 'Phase ID', 'Trx Date', 'Trans Description', 'Amount']]
         df_transactions.rename(columns={'Trx Date': 'Date', 'Trans Description': 'Description'}, inplace=True)
         df_transactions['Date'] = pd.to_datetime(df_transactions['Date']).dt.date
+        df_transactions.sort_values(by=['Job ID', 'Date'], inplace=True)
         return df_transactions
 
     def _generate_revenue_df(self, df_sales_journal, df_job_ledger):
@@ -440,6 +441,7 @@ class ProExcelMergerApp:
         df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
         if 'Amount' in df.columns and 'Billed' not in df.columns:
             df.rename(columns={'Amount': 'Billed'}, inplace=True)
+        df.sort_values(by='Job ID', inplace=True)
         return df
 
     def _generate_expenses_df(self, df_job_estimates, df_job_ledger):
@@ -453,7 +455,7 @@ class ProExcelMergerApp:
         
         # Percent Complete
         df_expenses['Percent Complete'] = (df_expenses['Actual Expenses'] / df_expenses['Est. Expenses']).fillna(0)
-        
+        df_expenses.sort_values(by=['Job ID', 'Cost Code ID', 'Phase ID'], inplace=True)
         return df_expenses[['Job ID', 'Cost Code ID', 'Phase Description', 'Phase ID', 'Est. Expenses', 'Actual Expenses', 'Percent Complete']]
 
     def _generate_summary_df(self, df_job_master, df_revenue, df_expenses):
@@ -510,10 +512,11 @@ class ProExcelMergerApp:
             if col_name in df_summary.columns:
                 col_idx = df_summary.columns.get_loc(col_name) + 1
                 for row_idx, job_id in enumerate(df_summary['Job ID'], 2):
-                    target_row_idx = df_revenue[df_revenue['Job ID'] == job_id].index.min()
-                    if pd.notna(target_row_idx):
-                        target_cell = f"A{target_row_idx + 2}"
-                        ws_summary.cell(row=row_idx, column=col_idx).hyperlink = f"#'Job Revenue'!{target_cell}"
+                    if pd.notna(df_summary.at[row_idx - 2, col_name]):
+                        target_row_idx = df_revenue[df_revenue['Job ID'] == job_id].index.min()
+                        if pd.notna(target_row_idx):
+                            target_cell = f"A{target_row_idx + 2}"
+                            ws_summary.cell(row=row_idx, column=col_idx).hyperlink = f"#'Job Revenue'!{target_cell}"
 
         # Hyperlinks from Summary to Expenses
         expenses_link_cols = ['Estimated Expenses', 'Actual Expenses', 'Expense Diff', 'Percent Complete']
@@ -521,10 +524,11 @@ class ProExcelMergerApp:
             if col_name in df_summary.columns:
                 col_idx = df_summary.columns.get_loc(col_name) + 1
                 for row_idx, job_id in enumerate(df_summary['Job ID'], 2):
-                    target_row_idx = df_expenses[df_expenses['Job ID'] == job_id].index.min()
-                    if pd.notna(target_row_idx):
-                        target_cell = f"A{target_row_idx + 2}"
-                        ws_summary.cell(row=row_idx, column=col_idx).hyperlink = f"#'Job Expenses'!{target_cell}"
+                    if pd.notna(df_summary.at[row_idx - 2, col_name]):
+                        target_row_idx = df_expenses[df_expenses['Job ID'] == job_id].index.min()
+                        if pd.notna(target_row_idx):
+                            target_cell = f"A{target_row_idx + 2}"
+                            ws_summary.cell(row=row_idx, column=col_idx).hyperlink = f"#'Job Expenses'!{target_cell}"
 
         # Hyperlinks from Expenses to Transactions
         if 'Job ID' in df_expenses.columns:
