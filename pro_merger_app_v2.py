@@ -21,8 +21,8 @@ class ProExcelMergerApp:
         self.output_file_path = tk.StringVar()
 
         self.config_file = 'merger_config_v2.json'
-        self.version = "2.0.0"
-        self.tab_order = ['Job Summary', 'Job Revenue', 'Job Expenses', 'Job Transactions']
+        self.version = "2.0.4"
+        self.tab_order = ['Job Summary', 'Job Revenue', 'Job Expenses', 'Job Transactions', 'Unlinked Items']
         self.tab_configs = {
             'Job Summary': {
                 'columns': ['Job ID', 'Project Manager', 'Contract Amount', 'Amt Billed', 'Left To Bill', 'Amt Recvd', 'Left to Receive', 'Estimated Expenses', 'Actual Expenses', 'Expense Diff', 'Percent Complete'],
@@ -39,9 +39,20 @@ class ProExcelMergerApp:
             'Job Transactions': {
                 'columns': ['Job ID', 'Cost Code ID', 'Phase Description', 'Phase ID', 'Date', 'Description', 'Amount'],
                 'renames': {}
+            },
+            'Unlinked Items': {
+                'columns': ['Source File', 'Status', 'Job ID', 'Cost Code ID', 'Phase ID', 'Trans Description', 'Debit Amt', 'Credit Amt', 'Billed', 'Amt Recvd', 'Contract Amount', 'Project Manager'],
+                'renames': {}
             }
         }
         self.percent_complete_phase_id = 'Supervision-Wages'
+
+        self.required_input_columns = {
+            'sales_journal': {'Job ID', 'Amt Recvd'},
+            'job_master': {'Job ID', 'Contract Amount', 'Project Manager'},
+            'job_ledger': {'Job ID', 'Cost Code ID', 'Phase ID', 'Trans Description', 'Debit Amt', 'Credit Amt', 'Trx Date'},
+            'job_estimates': {'Job ID', 'Cost Code ID', 'Phase ID', 'Est. Expenses'}
+        }
 
         self.load_app_configuration()
         self.create_menu()
@@ -111,14 +122,18 @@ class ProExcelMergerApp:
                 self.tab_order = config.get('tab_order', self.tab_order)
                 self.tab_configs = config.get('tab_configs', self.tab_configs)
                 self.percent_complete_phase_id = config.get('percent_complete_phase_id', self.percent_complete_phase_id)
+                loaded_reqs = config.get('required_input_columns', self.required_input_columns)
+                self.required_input_columns = {k: set(v) for k, v in loaded_reqs.items()}
         except FileNotFoundError:
             pass # Keep defaults if file not found
 
     def save_app_configuration(self):
+        reqs_to_save = {k: list(v) for k, v in self.required_input_columns.items()}
         config = {
             'tab_order': self.tab_order,
             'tab_configs': self.tab_configs,
-            'percent_complete_phase_id': self.percent_complete_phase_id
+            'percent_complete_phase_id': self.percent_complete_phase_id,
+            'required_input_columns': reqs_to_save
         }
         with open(self.config_file, 'w') as f:
             json.dump(config, f, indent=4)
@@ -281,28 +296,75 @@ class ProExcelMergerApp:
         if filename:
             self.set_logo(filename, self.main_frame)
 
+    def validate_input_file(self, filename, file_type):
+        try:
+            df_cols = set(pd.read_excel(filename, nrows=0).columns)
+
+            required = self.required_input_columns[file_type]
+            missing_cols = required - df_cols
+
+            is_sales_journal = (file_type == 'sales_journal')
+            has_billed_or_amount = ('Billed' in df_cols or 'Amount' in df_cols)
+
+            has_missing = bool(missing_cols)
+            if is_sales_journal and not has_billed_or_amount:
+                has_missing = True
+
+            if has_missing:
+                required_display = sorted(list(required))
+                if is_sales_journal:
+                    required_display.append('Billed (or Amount)')
+                    required_display = sorted(required_display)
+
+                title = "Oops! Column Mismatch"
+                message = (
+                    "OOPS! THAT FILE DOES NOT MATCH YOUR COLUMN CONFIGURATION THAT YOU SET. "
+                    "DID YOU MEAN TO DO THAT?\n\n"
+                    "HERE'S WHAT I HAVE:\n"
+                    f"{', '.join(required_display)}"
+                )
+                
+                return messagebox.askyesno(title, message, parent=self.root)
+
+            return True
+        except Exception as e:
+            messagebox.showerror("Error Reading File", f"Could not read the columns from the file: {e}")
+            return False
+
     def browse_sales_journal(self):
         filename = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
         if filename:
-            self.sales_journal_path.set(filename)
+            if self.validate_input_file(filename, 'sales_journal'):
+                self.sales_journal_path.set(filename)
+            else:
+                self.sales_journal_path.set('')
             self.check_inputs()
 
     def browse_job_master(self):
         filename = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
         if filename:
-            self.job_master_path.set(filename)
+            if self.validate_input_file(filename, 'job_master'):
+                self.job_master_path.set(filename)
+            else:
+                self.job_master_path.set('')
             self.check_inputs()
 
     def browse_job_ledger(self):
         filename = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
         if filename:
-            self.job_ledger_path.set(filename)
+            if self.validate_input_file(filename, 'job_ledger'):
+                self.job_ledger_path.set(filename)
+            else:
+                self.job_ledger_path.set('')
             self.check_inputs()
 
     def browse_job_estimates(self):
         filename = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
         if filename:
-            self.job_estimates_path.set(filename)
+            if self.validate_input_file(filename, 'job_estimates'):
+                self.job_estimates_path.set(filename)
+            else:
+                self.job_estimates_path.set('')
             self.check_inputs()
 
     def browse_output_file(self):
@@ -324,13 +386,15 @@ class ProExcelMergerApp:
             # if hasattr(self, 'filemenu'):
                 # self.filemenu.entryconfig("Configure Columns", state=tk.DISABLED)
 
-    def clean_job_ledger(self, df):
+    def clean_job_ledger(self, df_in):
+        df = df_in.copy()
         df.replace('', np.nan, inplace=True)
+        
         # Forward fill missing values in specified columns
-        df['Job ID'].fillna(method='ffill', inplace=True)
-        df['Cost Code ID'].fillna(method='ffill', inplace=True)
-        df['Phase Description'].fillna(method='ffill', inplace=True)
-        df['Phase ID'].fillna(method='ffill', inplace=True)
+        cols_to_ffill = ['Job ID', 'Cost Code ID', 'Phase Description', 'Phase ID']
+        for col in cols_to_ffill:
+            if col in df.columns:
+                df[col] = df[col].ffill()
 
         # Drop rows where 'Trans Description' is NaN, which are likely empty or summary rows
         df.dropna(subset=['Trans Description'], inplace=True)
@@ -351,78 +415,155 @@ class ProExcelMergerApp:
 
     def go_process(self):
         try:
-            df_sales_journal = pd.read_excel(self.sales_journal_path.get())
+            # --- 1. Load Raw Data and Add Fingerprints ---
+            unlinked_items = []
+            
+            df_sales_journal_raw = pd.read_excel(self.sales_journal_path.get()).reset_index().rename(columns={'index': 'original_index'})
+            df_job_master_raw = pd.read_excel(self.job_master_path.get()).reset_index().rename(columns={'index': 'original_index'})
+            df_job_ledger_raw = pd.read_excel(self.job_ledger_path.get()).reset_index().rename(columns={'index': 'original_index'})
+            df_job_estimates_raw = pd.read_excel(self.job_estimates_path.get()).reset_index().rename(columns={'index': 'original_index'})
+
+            # --- 2. Create working copies ---
+            df_sales_journal = df_sales_journal_raw.copy()
+            df_job_master = df_job_master_raw.copy()
+            df_job_ledger = df_job_ledger_raw.copy()
+            df_job_estimates = df_job_estimates_raw.copy()
+
+            # --- 3. Perform Initial Cleaning and Capture Dropped Rows ---
+            
+            # Clean Sales Journal
             df_sales_journal.dropna(subset=['Job ID'], inplace=True)
-            df_sales_journal.to_csv('debug_sales_journal.csv', index=False)
-            df_job_master = pd.read_excel(self.job_master_path.get())
+
+            # Clean Job Master
             if 'Unnamed: 0' in df_job_master.columns and 'Job ID' not in df_job_master.columns:
                 df_job_master.rename(columns={'Unnamed: 0': 'Job ID'}, inplace=True)
-            df_job_ledger = pd.read_excel(self.job_ledger_path.get())
-            df_job_estimates = pd.read_excel(self.job_estimates_path.get())
 
-            # Clean job estimates
+            # Clean Job Estimates
+            est_pre_clean_indices = df_job_estimates['original_index']
             df_job_estimates.dropna(subset=['Job ID'], inplace=True)
             df_job_estimates = df_job_estimates[~df_job_estimates['Job ID'].str.contains('Total', na=False)]
             df_job_estimates = df_job_estimates[~df_job_estimates['Job ID'].str.contains('Report', na=False)]
             df_job_estimates = df_job_estimates[df_job_estimates['Phase ID'] != 'Total']
             df_job_estimates.dropna(subset=['Cost Code ID', 'Phase ID'], inplace=True)
+            est_post_clean_indices = df_job_estimates['original_index']
+            dropped_est_indices = est_pre_clean_indices[~est_pre_clean_indices.isin(est_post_clean_indices)]
+            if not dropped_est_indices.empty:
+                dropped_est_df = df_job_estimates_raw[df_job_estimates_raw['original_index'].isin(dropped_est_indices)].copy()
+                dropped_est_df['Source File'] = 'Job Estimates'
+                dropped_est_df['Status'] = 'Dropped during initial cleaning'
+                unlinked_items.append(dropped_est_df)
 
-            # Clean numeric columns
+            # Clean Job Ledger
+            ledger_pre_clean_indices = df_job_ledger['original_index']
+            df_job_ledger = self.clean_job_ledger(df_job_ledger)
+            ledger_post_clean_indices = df_job_ledger['original_index']
+            dropped_ledger_indices = ledger_pre_clean_indices[~ledger_pre_clean_indices.isin(ledger_post_clean_indices)]
+            if not dropped_ledger_indices.empty:
+                dropped_ledger_df = df_job_ledger_raw[df_job_ledger_raw['original_index'].isin(dropped_ledger_indices)].copy()
+                dropped_ledger_df['Source File'] = 'Job Ledger'
+                dropped_ledger_df['Status'] = 'Dropped during ledger cleaning (e.g., no description)'
+                unlinked_items.append(dropped_ledger_df)
+
+            # --- 4. Clean Numeric Columns (on cleaned data) ---
             df_sales_journal = self.to_numeric_safe(df_sales_journal, ['Billed', 'Amt Recvd'])
             df_job_master = self.to_numeric_safe(df_job_master, ['Contract Amount'])
             df_job_ledger = self.to_numeric_safe(df_job_ledger, ['Debit Amt', 'Credit Amt'])
             df_job_estimates = self.to_numeric_safe(df_job_estimates, ['Est. Expenses'])
 
-            # Clean the job ledger dataframe
-            df_job_ledger = self.clean_job_ledger(df_job_ledger)
-
-            self.combine_and_save(df_sales_journal, df_job_master, df_job_ledger, df_job_estimates, parent_window=self.root)
+            # --- 5. Pass all data to combine and save ---
+            self.combine_and_save(
+                df_sales_journal, df_job_master, df_job_ledger, df_job_estimates, 
+                unlinked_items, parent_window=self.root
+            )
 
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {e}", parent=self.root)
 
-    def combine_and_save(self, df_sales_journal, df_job_master, df_job_ledger, df_job_estimates, parent_window=None):
+    def combine_and_save(self, df_sales_journal, df_job_master, df_job_ledger, df_job_estimates, unlinked_items, parent_window=None):
         if parent_window is None:
             parent_window = self.root
         try:
-            # --- 1. Generate Base DataFrames ---
+            # --- 1. Generate Base DataFrames and Collect Unlinked Items ---
+            df_revenue = self._generate_revenue_df(df_sales_journal, df_job_ledger)
+            df_expenses, unlinked_expenses = self._generate_expenses_df(df_job_estimates, df_job_ledger)
+            df_summary, unlinked_summary = self._generate_summary_df(df_job_master, df_revenue, df_expenses)
+
+            if not unlinked_expenses.empty:
+                unlinked_items.append(unlinked_expenses)
+            if not unlinked_summary.empty:
+                unlinked_items.append(unlinked_summary)
+
             base_dfs = {
-                'Job Summary': self._generate_summary_df(df_job_master, self._generate_revenue_df(df_sales_journal, df_job_ledger), self._generate_expenses_df(df_job_estimates, df_job_ledger)),
-                'Job Revenue': self._generate_revenue_df(df_sales_journal, df_job_ledger),
-                'Job Expenses': self._generate_expenses_df(df_job_estimates, df_job_ledger),
+                'Job Summary': df_summary,
+                'Job Revenue': df_revenue,
+                'Job Expenses': df_expenses,
                 'Job Transactions': self._generate_transactions_df(df_job_ledger)
             }
 
-            # --- 2. Configure DataFrames ---
+            # --- 2. Consolidate and Filter Unlinked Items ---
+            if unlinked_items:
+                all_unlinked_df = pd.concat(unlinked_items, ignore_index=True)
+                mask = (
+                    all_unlinked_df['Job ID'].notna() &
+                    all_unlinked_df['Trans Description'].notna() &
+                    (all_unlinked_df['Debit Amt'].notna() | all_unlinked_df['Credit Amt'].notna())
+                )
+                all_unlinked_df = all_unlinked_df[mask]
+
+                cols_to_drop = ['original_index', '_merge', 'merge_rev', 'merge_exp']
+                for col in cols_to_drop:
+                    if col in all_unlinked_df.columns:
+                        all_unlinked_df.drop(columns=col, inplace=True)
+                base_dfs['Unlinked Items'] = all_unlinked_df
+
+            # --- 3. Configure DataFrames ---
             configured_dfs = {}
             for tab_name in self.tab_order:
                 if tab_name in self.tab_configs and tab_name in base_dfs:
                     config = self.tab_configs[tab_name]
                     df = base_dfs[tab_name]
-                    
+                    for col in config['columns']:
+                        if col not in df.columns:
+                            df[col] = np.nan
                     existing_cols = [col for col in config['columns'] if col in df.columns]
-                    
                     output_df = df[existing_cols]
                     output_df = output_df.rename(columns=config['renames'])
                     configured_dfs[tab_name] = output_df
 
-            # --- 3. Save to CSV for debugging ---
+            # --- 4. Save to CSV for debugging ---
             for tab_name, df in configured_dfs.items():
                 df.to_csv(f'{tab_name.replace(" ", "_").lower()}_debug.csv', index=False)
 
-            # --- 4. Save to Excel ---
+            # --- 5. Save to Excel (Main Tabs) ---
             output_path = self.output_file_path.get()
+            unlinked_df_to_write = configured_dfs.pop('Unlinked Items', None)
+
             with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
                 for tab_name, df in configured_dfs.items():
                     df.to_excel(writer, sheet_name=tab_name, index=False)
 
-            # --- 5. ADD HYPERLINKS AND FORMATTING ---
-            wb = load_workbook(output_path)
-            self._add_hyperlinks(wb, configured_dfs.get('Job Summary'), configured_dfs.get('Job Expenses'), configured_dfs.get('Job Revenue'), configured_dfs.get('Job Transactions'))
-            self._apply_formatting(wb, configured_dfs)
-            wb.save(output_path)
+            # --- 6. Append Unlinked Sheet and Apply Final Formatting ---
+            try:
+                wb = load_workbook(output_path)
+                
+                if unlinked_df_to_write is not None and not unlinked_df_to_write.empty:
+                    ws = wb.create_sheet('Unlinked Items')
+                    from openpyxl.utils.dataframe import dataframe_to_rows
+                    for r in dataframe_to_rows(unlinked_df_to_write, index=False, header=True):
+                        ws.append(r)
+                
+                self._add_hyperlinks(wb, configured_dfs.get('Job Summary'), configured_dfs.get('Job Expenses'), configured_dfs.get('Job Revenue'), configured_dfs.get('Job Transactions'))
+                
+                if unlinked_df_to_write is not None:
+                    configured_dfs['Unlinked Items'] = unlinked_df_to_write
 
-            messagebox.showinfo("Success", f"Combined file saved to {output_path}")
+                self._apply_formatting(wb, configured_dfs)
+                
+                wb.save(output_path)
+                messagebox.showinfo("Success", f"Combined file saved to {output_path}")
+
+            except Exception as e:
+                messagebox.showerror("Error", f"An error occurred during final Excel processing: {e}", parent=parent_window)
 
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred during merging: {e}", parent=parent_window)
@@ -434,6 +575,7 @@ class ProExcelMergerApp:
         df_transactions.rename(columns={'Trx Date': 'Date', 'Trans Description': 'Description'}, inplace=True)
         df_transactions['Date'] = pd.to_datetime(df_transactions['Date']).dt.date
         df_transactions.sort_values(by=['Job ID', 'Date'], inplace=True)
+        df_transactions.reset_index(drop=True, inplace=True)
         return df_transactions
 
     def _generate_revenue_df(self, df_sales_journal, df_job_ledger):
@@ -442,6 +584,7 @@ class ProExcelMergerApp:
         if 'Amount' in df.columns and 'Billed' not in df.columns:
             df.rename(columns={'Amount': 'Billed'}, inplace=True)
         df.sort_values(by='Job ID', inplace=True)
+        df.reset_index(drop=True, inplace=True)
         return df
 
     def _generate_expenses_df(self, df_job_estimates, df_job_ledger):
@@ -449,16 +592,28 @@ class ProExcelMergerApp:
         actual_expenses = df_job_ledger.groupby(['Job ID', 'Cost Code ID', 'Phase ID'])['Debit Amt'].sum().reset_index()
         actual_expenses.rename(columns={'Debit Amt': 'Actual Expenses'}, inplace=True)
 
-        # Merge with estimates
-        df_expenses = pd.merge(df_job_estimates, actual_expenses, on=['Job ID', 'Cost Code ID', 'Phase ID'], how='left')
+        # Merge with estimates using an outer join to find unlinked items
+        df_merged = pd.merge(df_job_estimates, actual_expenses, on=['Job ID', 'Cost Code ID', 'Phase ID'], how='outer', indicator=True)
+        
+        # Separate the unlinked items (from actuals but not in estimates)
+        unlinked_expenses_df = df_merged[df_merged['_merge'] == 'right_only'].copy()
+        unlinked_expenses_df['Source File'] = 'Job Ledger'
+        unlinked_expenses_df['Status'] = 'Actual expense with no matching estimate'
+
+        # Create the main expenses df (everything that was in estimates)
+        df_expenses = df_merged[df_merged['_merge'] != 'right_only'].copy()
         df_expenses.rename(columns={'Est. Expenses': 'Est. Expenses'}, inplace=True)
         
         # Percent Complete
         df_expenses['Percent Complete'] = (df_expenses['Actual Expenses'] / df_expenses['Est. Expenses']).fillna(0)
         df_expenses.sort_values(by=['Job ID', 'Cost Code ID', 'Phase ID'], inplace=True)
-        return df_expenses[['Job ID', 'Cost Code ID', 'Phase Description', 'Phase ID', 'Est. Expenses', 'Actual Expenses', 'Percent Complete']]
+        df_expenses.reset_index(drop=True, inplace=True)
+        
+        final_cols = ['Job ID', 'Cost Code ID', 'Phase Description', 'Phase ID', 'Est. Expenses', 'Actual Expenses', 'Percent Complete']
+        return df_expenses[final_cols], unlinked_expenses_df
 
     def _generate_summary_df(self, df_job_master, df_revenue, df_expenses):
+        unlinked_items = []
         # Billed and Received
         billed_recvd = df_revenue.groupby('Job ID').agg(
             Amt_Billed=('Billed', 'sum'),
@@ -480,11 +635,27 @@ class ProExcelMergerApp:
 
         phase_expenses_agg['Percent Complete'] = (phase_expenses_agg['Phase_Act_Expenses'] / phase_expenses_agg['Phase_Est_Expenses']).fillna(0)
 
-        # Merge all
-        df_summary = pd.merge(df_job_master, billed_recvd, on='Job ID', how='left')
-        df_summary = pd.merge(df_summary, expenses, on='Job ID', how='left')
+        # --- Merge all, finding orphans ---
+        df_summary = pd.merge(df_job_master, billed_recvd, on='Job ID', how='outer', indicator='merge_rev')
+        unlinked_revenue = df_summary[df_summary['merge_rev'] == 'right_only'].copy()
+        if not unlinked_revenue.empty:
+            unlinked_revenue['Source File'] = 'Sales Journal'
+            unlinked_revenue['Status'] = 'Revenue item with no matching Job Master record'
+            unlinked_items.append(unlinked_revenue)
+
+        df_summary = df_summary[df_summary['merge_rev'] != 'right_only'] # Continue with linked items
+
+        df_summary = pd.merge(df_summary, expenses, on='Job ID', how='outer', indicator='merge_exp')
+        unlinked_expenses = df_summary[df_summary['merge_exp'] == 'right_only'].copy()
+        if not unlinked_expenses.empty:
+            unlinked_expenses['Source File'] = 'Job Expenses Tab'
+            unlinked_expenses['Status'] = 'Aggregated expense with no matching Job Master record'
+            unlinked_items.append(unlinked_expenses)
+        
+        df_summary = df_summary[df_summary['merge_exp'] != 'right_only'] # Continue with linked items
+
         df_summary = pd.merge(df_summary, phase_expenses_agg[['Job ID', 'Percent Complete']], on='Job ID', how='left')
-        df_summary['Percent Complete'].fillna(0, inplace=True)
+        df_summary['Percent Complete'] = df_summary['Percent Complete'].fillna(0)
 
         # Rename for consistency
         df_summary.rename(columns={
@@ -500,7 +671,9 @@ class ProExcelMergerApp:
         df_summary['Left to Receive'] = df_summary['Amt Billed'].abs() - df_summary['Amt Recvd']
         df_summary['Expense Diff'] = df_summary['Estimated Expenses'] - df_summary['Actual Expenses']
 
-        return df_summary
+        unlinked_summary_df = pd.concat(unlinked_items, ignore_index=True) if unlinked_items else pd.DataFrame()
+
+        return df_summary, unlinked_summary_df
 
     def _add_hyperlinks(self, wb, df_summary, df_expenses, df_revenue, df_transactions):
         ws_summary = wb['Job Summary']
