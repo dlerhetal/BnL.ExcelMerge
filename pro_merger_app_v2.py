@@ -7,6 +7,7 @@ import json
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, NamedStyle
 import numpy as np
+import os
 
 class ProExcelMergerApp:
     def __init__(self, root):
@@ -21,7 +22,7 @@ class ProExcelMergerApp:
         self.output_file_path = tk.StringVar()
 
         self.config_file = 'merger_config_v2.json'
-        self.version = "2.0.4"
+        self.version = "2.0.5"
         self.tab_order = ['Job Summary', 'Job Revenue', 'Job Expenses', 'Job Transactions', 'Unlinked Items']
         self.tab_configs = {
             'Job Summary': {
@@ -37,7 +38,7 @@ class ProExcelMergerApp:
                 'renames': {}
             },
             'Job Transactions': {
-                'columns': ['Job ID', 'Cost Code ID', 'Phase Description', 'Phase ID', 'Date', 'Description', 'Amount'],
+                'columns': ['Job ID', 'Cost Code ID', 'Phase Description', 'Phase ID', 'Date', 'Amount', 'Description'],
                 'renames': {}
             },
             'Unlinked Items': {
@@ -119,13 +120,31 @@ class ProExcelMergerApp:
         try:
             with open(self.config_file, 'r') as f:
                 config = json.load(f)
-                self.tab_order = config.get('tab_order', self.tab_order)
-                self.tab_configs = config.get('tab_configs', self.tab_configs)
-                self.percent_complete_phase_id = config.get('percent_complete_phase_id', self.percent_complete_phase_id)
+                
+                # Load tab_order and ensure Unlinked Items is present
+                loaded_tab_order = config.get('tab_order', self.tab_order)
+                if 'Unlinked Items' not in loaded_tab_order:
+                    loaded_tab_order.append('Unlinked Items')
+                self.tab_order = loaded_tab_order
+
+                # Load tab_configs and merge with defaults to ensure new tabs are added
+                loaded_tab_configs = config.get('tab_configs', {})
+                default_tab_configs = self.tab_configs.copy()
+                default_tab_configs.update(loaded_tab_configs)
+                self.tab_configs = default_tab_configs
+
+                # Load required_input_columns
                 loaded_reqs = config.get('required_input_columns', self.required_input_columns)
                 self.required_input_columns = {k: set(v) for k, v in loaded_reqs.items()}
+                
+                # Load percent_complete_phase_id
+                self.percent_complete_phase_id = config.get('percent_complete_phase_id', self.percent_complete_phase_id)
+
         except FileNotFoundError:
             pass # Keep defaults if file not found
+        except json.JSONDecodeError:
+            messagebox.showerror("Config Error", f"Could not read '{self.config_file}'. It may be corrupted.")
+            pass
 
     def save_app_configuration(self):
         reqs_to_save = {k: list(v) for k, v in self.required_input_columns.items()}
@@ -386,27 +405,6 @@ class ProExcelMergerApp:
             # if hasattr(self, 'filemenu'):
                 # self.filemenu.entryconfig("Configure Columns", state=tk.DISABLED)
 
-    def clean_job_ledger(self, df_in):
-        df = df_in.copy()
-        df.replace('', np.nan, inplace=True)
-        
-        # Forward fill missing values in specified columns
-        cols_to_ffill = ['Job ID', 'Cost Code ID', 'Phase Description', 'Phase ID']
-        for col in cols_to_ffill:
-            if col in df.columns:
-                df[col] = df[col].ffill()
-
-        # Drop rows where 'Trans Description' is NaN, which are likely empty or summary rows
-        df.dropna(subset=['Trans Description'], inplace=True)
-
-        # Remove rows containing 'Total' in 'Job ID' or 'Trans Description'
-        df = df[~df['Job ID'].astype(str).str.contains('Total', na=False)]
-        df = df[~df['Job ID'].astype(str).str.contains('Report', na=False)]
-        df = df[~df['Trans Description'].astype(str).str.contains('Total', na=False)]
-        df = df[df['Phase ID'] != 'Total']
-
-        return df
-
     def to_numeric_safe(self, df, columns):
         for col in columns:
             if col in df.columns:
@@ -453,16 +451,59 @@ class ProExcelMergerApp:
                 dropped_est_df['Status'] = 'Dropped during initial cleaning'
                 unlinked_items.append(dropped_est_df)
 
-            # Clean Job Ledger
-            ledger_pre_clean_indices = df_job_ledger['original_index']
-            df_job_ledger = self.clean_job_ledger(df_job_ledger)
-            ledger_post_clean_indices = df_job_ledger['original_index']
-            dropped_ledger_indices = ledger_pre_clean_indices[~ledger_pre_clean_indices.isin(ledger_post_clean_indices)]
-            if not dropped_ledger_indices.empty:
-                dropped_ledger_df = df_job_ledger_raw[df_job_ledger_raw['original_index'].isin(dropped_ledger_indices)].copy()
-                dropped_ledger_df['Source File'] = 'Job Ledger'
-                dropped_ledger_df['Status'] = 'Dropped during ledger cleaning (e.g., no description)'
-                unlinked_items.append(dropped_ledger_df)
+            # --- Detailed Job Ledger Cleaning ---
+            df_job_ledger.replace('', np.nan, inplace=True)
+
+            # Step 1: Drop rows with no Trans Description
+            rows_to_drop = df_job_ledger[df_job_ledger['Trans Description'].isna()]
+            if not rows_to_drop.empty:
+                dropped_indices = rows_to_drop['original_index']
+                dropped_df = df_job_ledger_raw[df_job_ledger_raw['original_index'].isin(dropped_indices)].copy()
+                dropped_df['Source File'] = 'Job Ledger'
+                dropped_df['Status'] = 'Dropped: Missing Trans Description'
+                unlinked_items.append(dropped_df)
+                df_job_ledger.drop(rows_to_drop.index, inplace=True)
+
+            # Step 2: Forward fill
+            cols_to_ffill = ['Job ID', 'Cost Code ID', 'Phase Description', 'Phase ID']
+            for col in cols_to_ffill:
+                if col in df_job_ledger.columns:
+                    df_job_ledger[col] = df_job_ledger[col].ffill()
+
+            # Step 3: Drop rows still missing Job ID or Cost Code/Phase ID
+            rows_to_drop = df_job_ledger[df_job_ledger['Job ID'].isna()]
+            if not rows_to_drop.empty:
+                dropped_indices = rows_to_drop['original_index']
+                dropped_df = df_job_ledger_raw[df_job_ledger_raw['original_index'].isin(dropped_indices)].copy()
+                dropped_df['Source File'] = 'Job Ledger'
+                dropped_df['Status'] = 'Dropped: Missing Job ID after f-fill'
+                unlinked_items.append(dropped_df)
+                df_job_ledger.drop(rows_to_drop.index, inplace=True)
+
+            rows_to_drop = df_job_ledger[df_job_ledger['Cost Code ID'].isna() | df_job_ledger['Phase ID'].isna()]
+            if not rows_to_drop.empty:
+                dropped_indices = rows_to_drop['original_index']
+                dropped_df = df_job_ledger_raw[df_job_ledger_raw['original_index'].isin(dropped_indices)].copy()
+                dropped_df['Source File'] = 'Job Ledger'
+                dropped_df['Status'] = 'Dropped: Missing Cost Code or Phase ID after f-fill'
+                unlinked_items.append(dropped_df)
+                df_job_ledger.drop(rows_to_drop.index, inplace=True)
+
+            # Step 4: Remove summary/total rows
+            total_mask = (
+                df_job_ledger['Job ID'].astype(str).str.contains('Total', na=False) |
+                df_job_ledger['Job ID'].astype(str).str.contains('Report', na=False) |
+                df_job_ledger['Trans Description'].astype(str).str.contains('Total', na=False) |
+                (df_job_ledger['Phase ID'] == 'Total')
+            )
+            rows_to_drop = df_job_ledger[total_mask]
+            if not rows_to_drop.empty:
+                dropped_indices = rows_to_drop['original_index']
+                dropped_df = df_job_ledger_raw[df_job_ledger_raw['original_index'].isin(dropped_indices)].copy()
+                dropped_df['Source File'] = 'Job Ledger'
+                dropped_df['Status'] = 'Dropped: Summary/Total Row'
+                unlinked_items.append(dropped_df)
+                df_job_ledger = df_job_ledger[~total_mask]
 
             # --- 4. Clean Numeric Columns (on cleaned data) ---
             df_sales_journal = self.to_numeric_safe(df_sales_journal, ['Billed', 'Amt Recvd'])
@@ -503,25 +544,42 @@ class ProExcelMergerApp:
             # --- 2. Consolidate and Filter Unlinked Items ---
             if unlinked_items:
                 all_unlinked_df = pd.concat(unlinked_items, ignore_index=True)
-                mask = (
-                    all_unlinked_df['Job ID'].notna() &
-                    all_unlinked_df['Trans Description'].notna() &
-                    (all_unlinked_df['Debit Amt'].notna() | all_unlinked_df['Credit Amt'].notna())
-                )
-                all_unlinked_df = all_unlinked_df[mask]
+
+                # Apply a single, strict filter to all unlinked items.
+                # A row is only kept if it has the key data points the user cares about.
+                required_filter_cols = ['Job ID', 'Trx Date', 'Trans Description', 'Debit Amt', 'Credit Amt']
+                if all(col in all_unlinked_df.columns for col in required_filter_cols):
+                    final_filter = (
+                        all_unlinked_df['Job ID'].notna() &
+                        all_unlinked_df['Trx Date'].notna() &
+                        all_unlinked_df['Trans Description'].notna() &
+                        (all_unlinked_df['Debit Amt'].notna() | all_unlinked_df['Credit Amt'].notna())
+                    )
+                    all_unlinked_df = all_unlinked_df[final_filter]
+                else:
+                    # If essential columns for filtering are missing, it implies no rows would match.
+                    all_unlinked_df = pd.DataFrame(columns=all_unlinked_df.columns)
 
                 cols_to_drop = ['original_index', '_merge', 'merge_rev', 'merge_exp']
                 for col in cols_to_drop:
                     if col in all_unlinked_df.columns:
                         all_unlinked_df.drop(columns=col, inplace=True)
+                
                 base_dfs['Unlinked Items'] = all_unlinked_df
+            else:
+                base_dfs['Unlinked Items'] = pd.DataFrame() # Empty df
 
             # --- 3. Configure DataFrames ---
             configured_dfs = {}
             for tab_name in self.tab_order:
                 if tab_name in self.tab_configs and tab_name in base_dfs:
-                    config = self.tab_configs[tab_name]
                     df = base_dfs[tab_name]
+                    if tab_name == 'Unlinked Items':
+                        # For Unlinked Items, use all columns, don't filter/rename
+                        configured_dfs[tab_name] = df
+                        continue
+
+                    config = self.tab_configs[tab_name]
                     for col in config['columns']:
                         if col not in df.columns:
                             df[col] = np.nan
@@ -546,7 +604,7 @@ class ProExcelMergerApp:
             try:
                 wb = load_workbook(output_path)
                 
-                if unlinked_df_to_write is not None and not unlinked_df_to_write.empty:
+                if unlinked_df_to_write is not None:
                     ws = wb.create_sheet('Unlinked Items')
                     from openpyxl.utils.dataframe import dataframe_to_rows
                     for r in dataframe_to_rows(unlinked_df_to_write, index=False, header=True):
