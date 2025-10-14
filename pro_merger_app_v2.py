@@ -25,7 +25,7 @@ class ProExcelMergerApp:
         self.template_path = tk.StringVar()
 
         self.config_file = 'merger_config_v2.json'
-        self.version = "2.0.7"
+        self.version = "2.0.8"
         self.tab_order = ['Job Summary', 'Job Revenue', 'Job Expenses', 'Job Transactions', 'Unlinked Items']
         self.tab_configs = {
             'Job Summary': {
@@ -65,8 +65,7 @@ class ProExcelMergerApp:
         self.main_frame = tk.Frame(root, padx=10, pady=10)
         self.main_frame.pack(padx=10, pady=10)
 
-        # Add logo
-        self.set_logo("C:/Users/dale/OneDrive/Documents/ISI/BnL/Sage/Images/BnL.Logo.jpg", self.main_frame)
+        # File selection UI
 
         # File selection UI
         row_num = 1
@@ -123,7 +122,6 @@ class ProExcelMergerApp:
         self.menubar = tk.Menu(self.root)
         
         self.filemenu = tk.Menu(self.menubar, tearoff=0)
-        self.filemenu.add_command(label="Select Logo", command=self.select_logo_config)
         self.filemenu.add_command(label="Select Template", command=self.browse_template_file)
         self.filemenu.add_command(label="Configure Columns", command=self.open_column_config)
         self.filemenu.add_separator()
@@ -293,12 +291,6 @@ class ProExcelMergerApp:
         about_window = tk.Toplevel(self.root)
         about_window.title("About Pro Excel Merger")
         
-        logo_path = "C:/Users/dale/OneDrive/Documents/ISI/BnL/Sage/Images/IDS.Logo.png"
-        logo_image = Image.open(logo_path)
-        logo_image = logo_image.resize((100, 100), Image.LANCZOS)
-        self.about_logo_photo = ImageTk.PhotoImage(logo_image)
-        
-        tk.Label(about_window, image=self.about_logo_photo).pack(pady=10)
         tk.Label(about_window, text=f"Version: {self.version}").pack(pady=5)
         
         tk.Label(about_window, text="Contact: Dale Linn").pack(pady=5)
@@ -311,29 +303,7 @@ class ProExcelMergerApp:
         link.pack()
         link.bind("<Button-1>", lambda e: webbrowser.open_new("https://github.com/dlerhetal/BnL.ExcelMerge/releases"))
 
-    def set_logo(self, logo_path, frame):
-        try:
-            logo_image = Image.open(logo_path)
-            aspect_ratio = logo_image.width / logo_image.height
-            logo_image = logo_image.resize((int(50 * aspect_ratio), 50), Image.LANCZOS)
-            self.logo_photo = ImageTk.PhotoImage(logo_image)
-            
-            if hasattr(self, 'logo_label'):
-                self.logo_label.config(image=self.logo_photo)
-            else:
-                self.logo_label = tk.Label(frame, image=self.logo_photo)
-                self.logo_label.grid(row=0, column=0, columnspan=3, pady=10)
 
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not load logo: {e}")
-
-    def select_logo_config(self):
-        filename = filedialog.askopenfilename(filetypes=[
-            ("Image files", "*.jpg *.jpeg *.png *.gif *.bmp"),
-            ("All files", "*.*",)
-        ])
-        if filename:
-            self.set_logo(filename, self.main_frame)
 
     def validate_input_file(self, filename, file_type):
         try:
@@ -621,7 +591,7 @@ class ProExcelMergerApp:
 
             # --- 3. Save Master File ---
             master_output_path = self.output_file_path.get()
-            self.save_report(master_output_path, base_dfs)
+            self.save_report(master_output_path, base_dfs, dashboard_type='main')
 
             # --- 4. Save PM Files ---
             if 'Project Manager' in df_summary.columns:
@@ -645,7 +615,7 @@ class ProExcelMergerApp:
                             else:
                                 pm_dfs[name] = df.copy()
 
-                        self.save_report(pm_output_path, pm_dfs)
+                        self.save_report(pm_output_path, pm_dfs, dashboard_type='pm')
                     except Exception as e:
                         error_message = traceback.format_exc()
                         print(error_message)
@@ -654,7 +624,7 @@ class ProExcelMergerApp:
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred during merging: {e}", parent=parent_window)
 
-    def save_report(self, output_path, dfs):
+    def save_report(self, output_path, dfs, dashboard_type='main'):
         # Load the template
         template_path = self.template_path.get()
         try:
@@ -695,8 +665,10 @@ class ProExcelMergerApp:
 
         # --- Create Dashboard ---
         chart_files_to_delete = []
-        if 'Dashboard' in wb.sheetnames:
+        if dashboard_type == 'main' and 'Dashboard' in wb.sheetnames:
             chart_files_to_delete = self._create_dashboard(wb, dfs)
+        elif dashboard_type == 'pm' and 'Dashboard' in wb.sheetnames:
+            chart_files_to_delete = self._create_pm_dashboard(wb, dfs)
 
         # --- Hide Unlinked Items tab ---
         if 'Unlinked Items' in wb.sheetnames:
@@ -1047,24 +1019,75 @@ class ProExcelMergerApp:
         ws.add_image(Image(fname), 'A25')
         plt.close(fig)
 
-        # --- 3. Project Health Status Pie Chart ---
-        with np.errstate(divide='ignore', invalid='ignore'):
-            billed_pct = df_summary['Amt Billed'] / df_summary['Contract Amount']
-            cost_pct = df_summary['Actual Expenses'] / df_summary['Estimated Expenses']
-        df_summary['Status'] = np.where(billed_pct > cost_pct, 'Red', 'Green')
-        health_counts = df_summary['Status'].value_counts()
+        # --- 5. Return temporary image files for cleanup ---
+        return chart_files
 
-        fig, ax = plt.subplots(figsize=(5, 5))
-        ax.pie(health_counts, labels=health_counts.index, autopct='%1.1f%%', startangle=90, colors=['#c44e52', '#55a868'])
-        ax.set_title('Project Health Status (Billing vs. Cost %)')
+    def _create_pm_dashboard(self, wb, dfs):
+        import matplotlib.pyplot as plt
+        import os
+        import tempfile
+        from openpyxl.drawing.image import Image
+
+        if 'Job Summary' not in dfs or dfs['Job Summary'].empty:
+            return []
+
+        df_summary = dfs['Job Summary'].copy()
+        ws = wb['Dashboard']
+        temp_dir = tempfile.gettempdir()
+        chart_files = []
+
+        # --- 1. Total Number of Projects ---
+        total_projects = len(df_summary)
+
+        # --- Chart Style ---
+        plt.style.use('seaborn-v0_8-whitegrid')
+
+        # --- 2. Total Revenue by Project (Bar Chart) ---
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.bar(df_summary['Job ID'], df_summary['Amt Billed'], color='#4c72b0')
+        ax.set_ylabel('Total Revenue ($)')
+        ax.set_title(f'Total Revenue by Project (Total Projects: {total_projects})')
+        plt.xticks(rotation=45, ha="right")
         plt.tight_layout()
-        fname = os.path.join(temp_dir, "chart_health_pie.png")
+        fname = os.path.join(temp_dir, "pm_chart_revenue.png")
         plt.savefig(fname)
         chart_files.append(fname)
-        ws.add_image(Image(fname), 'J25')
+        ws.add_image(Image(fname), 'A1')
         plt.close(fig)
 
-        # --- 5. Return temporary image files for cleanup ---
+        # --- 3. Total Profit by Project (Bar Chart) ---
+        df_summary['Profit'] = df_summary['Amt Billed'] - df_summary['Actual Expenses']
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.bar(df_summary['Job ID'], df_summary['Profit'], color='#55a868')
+        ax.set_ylabel('Total Profit ($)')
+        ax.set_title('Total Profit by Project')
+        plt.xticks(rotation=45, ha="right")
+        plt.tight_layout()
+        fname = os.path.join(temp_dir, "pm_chart_profit.png")
+        plt.savefig(fname)
+        chart_files.append(fname)
+        ws.add_image(Image(fname), 'J1')
+        plt.close(fig)
+
+        # --- 4. Percent Profit by Project (Bar Chart) ---
+        with np.errstate(divide='ignore', invalid='ignore'):
+            df_summary['Percent Profit'] = (df_summary['Profit'] / df_summary['Amt Billed'])
+        df_summary['Percent Profit'].replace([np.inf, -np.inf], 0, inplace=True)
+        df_summary['Percent Profit'] = df_summary['Percent Profit'].fillna(0)
+        
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.bar(df_summary['Job ID'], df_summary['Percent Profit'], color='#c44e52')
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
+        ax.set_ylabel('Percent Profit (%)')
+        ax.set_title('Percent Profit by Project')
+        plt.xticks(rotation=45, ha="right")
+        plt.tight_layout()
+        fname = os.path.join(temp_dir, "pm_chart_percent_profit.png")
+        plt.savefig(fname)
+        chart_files.append(fname)
+        ws.add_image(Image(fname), 'A25')
+        plt.close(fig)
+
         return chart_files
 
 
@@ -1072,3 +1095,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = ProExcelMergerApp(root)
     root.mainloop()
+
