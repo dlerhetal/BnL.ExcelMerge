@@ -25,7 +25,7 @@ class ProExcelMergerApp:
         self.template_path = tk.StringVar()
 
         self.config_file = 'merger_config_v2.json'
-        self.version = "2.0.5"
+        self.version = "2.0.7"
         self.tab_order = ['Job Summary', 'Job Revenue', 'Job Expenses', 'Job Transactions', 'Unlinked Items']
         self.tab_configs = {
             'Job Summary': {
