@@ -6,8 +6,10 @@ import webbrowser
 import json
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, NamedStyle
+from openpyxl.worksheet.hyperlink import Hyperlink
 import numpy as np
 import os
+import traceback
 
 class ProExcelMergerApp:
     def __init__(self, root):
@@ -335,15 +337,17 @@ class ProExcelMergerApp:
                     required_display.append('Billed (or Amount)')
                     required_display = sorted(required_display)
 
-                title = "Oops! Column Mismatch"
+                title = "Column Mismatch"
                 message = (
-                    "OOPS! THAT FILE DOES NOT MATCH YOUR COLUMN CONFIGURATION THAT YOU SET. "
-                    "DID YOU MEAN TO DO THAT?\n\n"
-                    "HERE'S WHAT I HAVE:\n"
+                    "The selected file has incorrect columns. Do you want to select a different file?\n\n"
+                    "Required columns:\n"
                     f"{', '.join(required_display)}"
                 )
                 
-                return messagebox.askyesno(title, message, parent=self.root)
+                if messagebox.askyesno(title, message, parent=self.root):
+                    return "retry"
+                else:
+                    return False
 
             return True
         except Exception as e:
@@ -353,7 +357,10 @@ class ProExcelMergerApp:
     def browse_sales_journal(self):
         filename = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
         if filename:
-            if self.validate_input_file(filename, 'sales_journal'):
+            validation_result = self.validate_input_file(filename, 'sales_journal')
+            if validation_result == "retry":
+                self.browse_sales_journal() # Recursive call
+            elif validation_result:
                 self.sales_journal_path.set(filename)
             else:
                 self.sales_journal_path.set('')
@@ -362,7 +369,10 @@ class ProExcelMergerApp:
     def browse_job_master(self):
         filename = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
         if filename:
-            if self.validate_input_file(filename, 'job_master'):
+            validation_result = self.validate_input_file(filename, 'job_master')
+            if validation_result == "retry":
+                self.browse_job_master() # Recursive call
+            elif validation_result:
                 self.job_master_path.set(filename)
             else:
                 self.job_master_path.set('')
@@ -371,7 +381,10 @@ class ProExcelMergerApp:
     def browse_job_ledger(self):
         filename = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
         if filename:
-            if self.validate_input_file(filename, 'job_ledger'):
+            validation_result = self.validate_input_file(filename, 'job_ledger')
+            if validation_result == "retry":
+                self.browse_job_ledger() # Recursive call
+            elif validation_result:
                 self.job_ledger_path.set(filename)
             else:
                 self.job_ledger_path.set('')
@@ -380,7 +393,10 @@ class ProExcelMergerApp:
     def browse_job_estimates(self):
         filename = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
         if filename:
-            if self.validate_input_file(filename, 'job_estimates'):
+            validation_result = self.validate_input_file(filename, 'job_estimates')
+            if validation_result == "retry":
+                self.browse_job_estimates() # Recursive call
+            elif validation_result:
                 self.job_estimates_path.set(filename)
             else:
                 self.job_estimates_path.set('')
@@ -465,10 +481,15 @@ class ProExcelMergerApp:
                 df_job_ledger.drop(rows_to_drop.index, inplace=True)
 
             # Step 2: Forward fill
-            cols_to_ffill = ['Job ID', 'Cost Code ID', 'Phase Description', 'Phase ID']
-            for col in cols_to_ffill:
+            # First, forward-fill 'Job ID' to ensure groups are correctly identified
+            if 'Job ID' in df_job_ledger.columns:
+                df_job_ledger['Job ID'] = df_job_ledger['Job ID'].ffill()
+
+            # Then, forward-fill other columns within each 'Job ID' group
+            group_cols = ['Cost Code ID', 'Phase Description', 'Phase ID']
+            for col in group_cols:
                 if col in df_job_ledger.columns:
-                    df_job_ledger[col] = df_job_ledger[col].ffill()
+                    df_job_ledger[col] = df_job_ledger.groupby('Job ID', sort=False)[col].ffill()
 
             # Step 3: Drop rows still missing Job ID or Cost Code/Phase ID
             rows_to_drop = df_job_ledger[df_job_ledger['Job ID'].isna()]
@@ -511,11 +532,16 @@ class ProExcelMergerApp:
             df_job_ledger = self.to_numeric_safe(df_job_ledger, ['Debit Amt', 'Credit Amt'])
             df_job_estimates = self.to_numeric_safe(df_job_estimates, ['Est. Expenses'])
 
+            # --- 4a. Drop duplicates before merging ---
+            df_job_estimates.drop_duplicates(subset=['Job ID', 'Cost Code ID', 'Phase ID'], keep='first', inplace=True)
+            df_job_ledger.drop_duplicates(subset=['Job ID', 'Cost Code ID', 'Phase ID', 'Trx Date', 'Trans Description', 'Debit Amt', 'Credit Amt'], keep='first', inplace=True)
+
             # --- 5. Pass all data to combine and save ---
             self.combine_and_save(
                 df_sales_journal, df_job_master, df_job_ledger, df_job_estimates, 
                 unlinked_items, parent_window=self.root
             )
+            messagebox.showinfo("Success", "All files created successfully.")
 
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {e}", parent=self.root)
@@ -535,18 +561,24 @@ class ProExcelMergerApp:
                 unlinked_items.append(unlinked_summary)
 
             base_dfs = {
-                'Job Summary': df_summary,
-                'Job Revenue': df_revenue,
+                'Job Summary': df_summary.reset_index(drop=True),
+                'Job Revenue': df_revenue.reset_index(drop=True),
                 'Job Expenses': df_expenses,
                 'Job Transactions': self._generate_transactions_df(df_job_ledger)
             }
+
+            # Enforce the canonical column order before further processing
+            for name, df in base_dfs.items():
+                if name in self.tab_configs:
+                    canonical_cols = self.tab_configs[name]['columns']
+                    # Filter to columns that actually exist in the dataframe to avoid errors
+                    existing_cols = [col for col in canonical_cols if col in df.columns]
+                    base_dfs[name] = df[existing_cols]
 
             # --- 2. Consolidate and Filter Unlinked Items ---
             if unlinked_items:
                 all_unlinked_df = pd.concat(unlinked_items, ignore_index=True)
 
-                # Apply a single, strict filter to all unlinked items.
-                # A row is only kept if it has the key data points the user cares about.
                 required_filter_cols = ['Job ID', 'Trx Date', 'Trans Description', 'Debit Amt', 'Credit Amt']
                 if all(col in all_unlinked_df.columns for col in required_filter_cols):
                     final_filter = (
@@ -557,7 +589,6 @@ class ProExcelMergerApp:
                     )
                     all_unlinked_df = all_unlinked_df[final_filter]
                 else:
-                    # If essential columns for filtering are missing, it implies no rows would match.
                     all_unlinked_df = pd.DataFrame(columns=all_unlinked_df.columns)
 
                 cols_to_drop = ['original_index', '_merge', 'merge_rev', 'merge_exp']
@@ -567,64 +598,108 @@ class ProExcelMergerApp:
                 
                 base_dfs['Unlinked Items'] = all_unlinked_df
             else:
-                base_dfs['Unlinked Items'] = pd.DataFrame() # Empty df
+                base_dfs['Unlinked Items'] = pd.DataFrame()
 
-            # --- 3. Configure DataFrames ---
-            configured_dfs = {}
-            for tab_name in self.tab_order:
-                if tab_name in self.tab_configs and tab_name in base_dfs:
-                    df = base_dfs[tab_name]
-                    if tab_name == 'Unlinked Items':
-                        # For Unlinked Items, use all columns, don't filter/rename
-                        configured_dfs[tab_name] = df
-                        continue
+            # --- 3. Save Master File ---
+            master_output_path = self.output_file_path.get()
+            self.save_report(master_output_path, base_dfs)
 
-                    config = self.tab_configs[tab_name]
-                    for col in config['columns']:
-                        if col not in df.columns:
-                            df[col] = np.nan
-                    existing_cols = [col for col in config['columns'] if col in df.columns]
-                    output_df = df[existing_cols]
-                    output_df = output_df.rename(columns=config['renames'])
-                    configured_dfs[tab_name] = output_df
+            # --- 4. Save PM Files ---
+            if 'Project Manager' in df_summary.columns:
+                project_managers = df_summary['Project Manager'].dropna().unique()
+                output_dir = os.path.dirname(master_output_path)
 
-            # --- 4. Save to CSV for debugging ---
-            for tab_name, df in configured_dfs.items():
-                df.to_csv(f'{tab_name.replace(" ", "_").lower()}_debug.csv', index=False)
+                for pm in project_managers:
+                    try:
+                        # Sanitize the PM name for the filename
+                        sanitized_pm = "".join([c for c in pm if c.isalpha() or c.isdigit() or c.isspace()]).rstrip()
+                        pm_filename = f"{sanitized_pm.replace(' ', '_')}_report.xlsm"
+                        pm_output_path = os.path.join(output_dir, pm_filename)
+                        
+                        pm_dfs = {}
+                        for name, df in base_dfs.items():
+                            if 'Project Manager' in df.columns:
+                                pm_dfs[name] = df[df['Project Manager'] == pm].copy().reset_index(drop=True)
+                            elif 'Job ID' in df.columns:
+                                pm_job_ids = base_dfs['Job Summary'][base_dfs['Job Summary']['Project Manager'] == pm]['Job ID'].unique()
+                                pm_dfs[name] = df[df['Job ID'].isin(pm_job_ids)].copy().reset_index(drop=True)
+                            else:
+                                pm_dfs[name] = df.copy()
 
-            # --- 5. Save to Excel (Main Tabs) ---
-            output_path = self.output_file_path.get()
-            unlinked_df_to_write = configured_dfs.pop('Unlinked Items', None)
-
-            with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-                for tab_name, df in configured_dfs.items():
-                    df.to_excel(writer, sheet_name=tab_name, index=False)
-
-            # --- 6. Append Unlinked Sheet and Apply Final Formatting ---
-            try:
-                wb = load_workbook(output_path)
-                
-                if unlinked_df_to_write is not None:
-                    ws = wb.create_sheet('Unlinked Items')
-                    from openpyxl.utils.dataframe import dataframe_to_rows
-                    for r in dataframe_to_rows(unlinked_df_to_write, index=False, header=True):
-                        ws.append(r)
-                
-                self._add_hyperlinks(wb, configured_dfs.get('Job Summary'), configured_dfs.get('Job Expenses'), configured_dfs.get('Job Revenue'), configured_dfs.get('Job Transactions'))
-                
-                if unlinked_df_to_write is not None:
-                    configured_dfs['Unlinked Items'] = unlinked_df_to_write
-
-                self._apply_formatting(wb, configured_dfs)
-                
-                wb.save(output_path)
-                messagebox.showinfo("Success", f"Combined file saved to {output_path}")
-
-            except Exception as e:
-                messagebox.showerror("Error", f"An error occurred during final Excel processing: {e}", parent=parent_window)
+                        self.save_report(pm_output_path, pm_dfs)
+                    except Exception as e:
+                        error_message = traceback.format_exc()
+                        print(error_message)
+                        messagebox.showerror("Error", f"An error occurred while creating the report for {pm}:\n{error_message}", parent=parent_window)
 
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred during merging: {e}", parent=parent_window)
+
+    def save_report(self, output_path, dfs):
+        # Load the template
+        template_path = "ProMerger_Template.xlsm"
+        try:
+            wb = load_workbook(template_path, keep_vba=True)
+        except FileNotFoundError:
+            messagebox.showerror("Error", f"Template file not found: {template_path}")
+            return
+
+        # --- Write data to sheets ---
+        for tab_name, df in dfs.items():
+            if tab_name in wb.sheetnames:
+                ws = wb[tab_name]
+                # Clear existing data except headers
+                for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                    for cell in row:
+                        cell.value = None
+                
+                # Drop any unnamed index columns
+                df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+
+                from openpyxl.utils.dataframe import dataframe_to_rows
+                for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=False), 2):
+                    for c_idx, value in enumerate(row, 1):
+                        ws.cell(row=r_idx, column=c_idx, value=value)
+
+        # --- Clear existing hyperlinks from template ---
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            for row in ws.iter_rows():
+                for cell in row:
+                    if cell.hyperlink:
+                        cell.hyperlink = None
+
+        # --- Hyperlinks and Formatting ---
+        if 'Job Summary' in dfs:
+            self._add_hyperlinks(wb, dfs.get('Job Summary'), dfs.get('Job Expenses'), dfs.get('Job Revenue'), dfs.get('Job Transactions'))
+            self._apply_formatting(wb, dfs)
+
+        # --- Create Dashboard ---
+        chart_files_to_delete = []
+        if 'Dashboard' in wb.sheetnames:
+            chart_files_to_delete = self._create_dashboard(wb, dfs)
+
+        # --- Hide Unlinked Items tab ---
+        if 'Unlinked Items' in wb.sheetnames:
+            wb['Unlinked Items'].sheet_state = 'hidden'
+
+        # --- Set active sheet to Dashboard ---
+        if 'Dashboard' in wb.sheetnames:
+            wb.active = wb['Dashboard']
+
+        # --- Save the workbook ---
+        if output_path.endswith(".xlsx"):
+            output_path = output_path.replace(".xlsx", ".xlsm")
+        wb.save(output_path)
+
+        # --- Clean up temporary chart files ---
+        for f in chart_files_to_delete:
+            try:
+                os.remove(f)
+            except OSError as e:
+                print(f"Error removing temporary file {f}: {e}")
+
+
 
     def _generate_transactions_df(self, df_job_ledger):
         df_transactions = df_job_ledger.copy()
@@ -643,12 +718,16 @@ class ProExcelMergerApp:
             df.rename(columns={'Amount': 'Billed'}, inplace=True)
         df.sort_values(by='Job ID', inplace=True)
         df.reset_index(drop=True, inplace=True)
+        df.drop(columns=['original_index'], inplace=True, errors='ignore')
         return df
 
     def _generate_expenses_df(self, df_job_estimates, df_job_ledger):
         # Actual Expenses
         actual_expenses = df_job_ledger.groupby(['Job ID', 'Cost Code ID', 'Phase ID'])['Debit Amt'].sum().reset_index()
         actual_expenses.rename(columns={'Debit Amt': 'Actual Expenses'}, inplace=True)
+
+        # Drop duplicates from actual_expenses to prevent cartesian product
+        actual_expenses.drop_duplicates(subset=['Job ID', 'Cost Code ID', 'Phase ID'], keep='first', inplace=True)
 
         # Merge with estimates using an outer join to find unlinked items
         df_merged = pd.merge(df_job_estimates, actual_expenses, on=['Job ID', 'Cost Code ID', 'Phase ID'], how='outer', indicator=True)
@@ -684,15 +763,6 @@ class ProExcelMergerApp:
             Actual_Expenses=('Actual Expenses', 'sum')
         ).reset_index()
 
-        # Percent Complete based on phase_id_criteria
-        phase_expenses = df_expenses[df_expenses['Phase ID'] == self.percent_complete_phase_id]
-        phase_expenses_agg = phase_expenses.groupby('Job ID').agg(
-            Phase_Est_Expenses=('Est. Expenses', 'sum'),
-            Phase_Act_Expenses=('Actual Expenses', 'sum')
-        ).reset_index()
-
-        phase_expenses_agg['Percent Complete'] = (phase_expenses_agg['Phase_Act_Expenses'] / phase_expenses_agg['Phase_Est_Expenses']).fillna(0)
-
         # --- Merge all, finding orphans ---
         df_summary = pd.merge(df_job_master, billed_recvd, on='Job ID', how='outer', indicator='merge_rev')
         unlinked_revenue = df_summary[df_summary['merge_rev'] == 'right_only'].copy()
@@ -712,9 +782,6 @@ class ProExcelMergerApp:
         
         df_summary = df_summary[df_summary['merge_exp'] != 'right_only'] # Continue with linked items
 
-        df_summary = pd.merge(df_summary, phase_expenses_agg[['Job ID', 'Percent Complete']], on='Job ID', how='left')
-        df_summary['Percent Complete'] = df_summary['Percent Complete'].fillna(0)
-
         # Rename for consistency
         df_summary.rename(columns={
             'Amt_Billed': 'Amt Billed',
@@ -729,48 +796,67 @@ class ProExcelMergerApp:
         df_summary['Left to Receive'] = df_summary['Amt Billed'].abs() - df_summary['Amt Recvd']
         df_summary['Expense Diff'] = df_summary['Estimated Expenses'] - df_summary['Actual Expenses']
 
+        # NEW Percent Complete calculation based on total expenses
+        # Use np.divide to handle division by zero safely, then clean up inf and NaN
+        with np.errstate(divide='ignore', invalid='ignore'):
+            df_summary['Percent Complete'] = np.divide(
+                df_summary['Actual Expenses'], 
+                df_summary['Estimated Expenses']
+            )
+        df_summary['Percent Complete'].replace([np.inf, -np.inf], 0, inplace=True) # Replace inf with 0
+        df_summary['Percent Complete'] = df_summary['Percent Complete'].fillna(0)
+
+        # Drop the merge indicator columns
+        df_summary.drop(columns=['merge_rev', 'merge_exp'], inplace=True)
+
         unlinked_summary_df = pd.concat(unlinked_items, ignore_index=True) if unlinked_items else pd.DataFrame()
 
+        df_summary.drop(columns=['original_index'], inplace=True, errors='ignore')
         return df_summary, unlinked_summary_df
 
     def _add_hyperlinks(self, wb, df_summary, df_expenses, df_revenue, df_transactions):
+        from openpyxl.worksheet.hyperlink import Hyperlink
+        
         ws_summary = wb['Job Summary']
         ws_expenses = wb['Job Expenses']
 
-        # Hyperlinks from Summary to Revenue
-        revenue_link_cols = ['Amt Billed', 'Left To Bill', 'Amt Recvd', 'Left to Receive']
-        for col_name in revenue_link_cols:
-            if col_name in df_summary.columns:
-                col_idx = df_summary.columns.get_loc(col_name) + 1
-                for row_idx, job_id in enumerate(df_summary['Job ID'], 2):
-                    if pd.notna(df_summary.at[row_idx - 2, col_name]):
-                        target_row_idx = df_revenue[df_revenue['Job ID'] == job_id].index.min()
-                        if pd.notna(target_row_idx):
-                            target_cell = f"A{target_row_idx + 2}"
-                            ws_summary.cell(row=row_idx, column=col_idx).hyperlink = f"#'Job Revenue'!{target_cell}"
+        for col_name in df_summary.columns:
+            target_sheet_name = None
+            target_df = None
 
-        # Hyperlinks from Summary to Expenses
-        expenses_link_cols = ['Estimated Expenses', 'Actual Expenses', 'Expense Diff', 'Percent Complete']
-        for col_name in expenses_link_cols:
-            if col_name in df_summary.columns:
+            if col_name in ['Amt Billed', 'Left To Bill', 'Amt Recvd', 'Left to Receive']:
+                target_sheet_name = 'Job Revenue'
+                target_df = df_revenue
+            elif col_name in ['Estimated Expenses', 'Actual Expenses', 'Expense Diff', 'Percent Complete']:
+                target_sheet_name = 'Job Expenses'
+                target_df = df_expenses
+
+            if target_sheet_name and target_df is not None:
                 col_idx = df_summary.columns.get_loc(col_name) + 1
                 for row_idx, job_id in enumerate(df_summary['Job ID'], 2):
                     if pd.notna(df_summary.at[row_idx - 2, col_name]):
-                        target_row_idx = df_expenses[df_expenses['Job ID'] == job_id].index.min()
+                        target_row_idx = target_df[target_df['Job ID'] == job_id].index.min()
                         if pd.notna(target_row_idx):
                             target_cell = f"A{target_row_idx + 2}"
-                            ws_summary.cell(row=row_idx, column=col_idx).hyperlink = f"#'Job Expenses'!{target_cell}"
+                            location = f"#'{target_sheet_name}'!{target_cell}"
+                            cell = ws_summary.cell(row=row_idx, column=col_idx)
+                            cell.hyperlink = Hyperlink(ref="", location=location, display=str(cell.value))
 
         # Hyperlinks from Expenses to Transactions
         if 'Job ID' in df_expenses.columns:
-            col_idx = df_expenses.columns.get_loc('Job ID') + 1
             for row_idx, job_id in enumerate(df_expenses['Job ID'], 2):
                 target_row_idx = df_transactions[df_transactions['Job ID'] == job_id].index.min()
                 if pd.notna(target_row_idx):
                     target_cell = f"A{target_row_idx + 2}"
-                    ws_expenses.cell(row=row_idx, column=col_idx).hyperlink = f"#'Job Transactions'!{target_cell}"
+                    location = f"#'Job Transactions'!{target_cell}"
+                    cell = ws_expenses.cell(row=row_idx, column=df_expenses.columns.get_loc('Job ID') + 1)
+                    cell.hyperlink = Hyperlink(ref="", location=location, display=str(cell.value))
+
 
     def _apply_formatting(self, wb, configured_dfs):
+        from openpyxl.formatting.rule import Rule
+        from openpyxl.styles.differential import DifferentialStyle
+
         # Define styles
         currency_style = NamedStyle(name='currency', number_format='"$"#,##0.00;[Red]"$"#,##0.00')
         percent_style = NamedStyle(name='percent', number_format='0.00%')
@@ -792,6 +878,19 @@ class ProExcelMergerApp:
                 currency_cols = ['Contract Amount', 'Amt Billed', 'Left To Bill', 'Amt Recvd', 'Left to Receive', 'Estimated Expenses', 'Actual Expenses', 'Expense Diff']
                 percent_cols = ['Percent Complete']
                 self._format_sheet(ws, df, currency_cols, percent_cols, None, renames)
+
+                # Add conditional formatting for billing vs. cost
+                if not df.empty:
+                    # Rule for Green: Cost in excess of billing (I/H > D/C)
+                    green_rule = Rule(type='expression', dxf=DifferentialStyle(fill=green_fill), stopIfTrue=False)
+                    green_rule.formula = ['AND($H2<>0, $C2<>0, $I2/$H2 > $D2/$C2)']
+                    ws.conditional_formatting.add(f'A2:{ws.cell(row=df.shape[0]+1, column=df.shape[1]).column_letter}{df.shape[0]+1}', green_rule)
+
+                    # Rule for Red: Billing in excess of cost (D/C > I/H)
+                    red_rule = Rule(type='expression', dxf=DifferentialStyle(fill=red_fill), stopIfTrue=False)
+                    red_rule.formula = ['AND($H2<>0, $C2<>0, $D2/$C2 > $I2/$H2)']
+                    ws.conditional_formatting.add(f'A2:{ws.cell(row=df.shape[0]+1, column=df.shape[1]).column_letter}{df.shape[0]+1}', red_rule)
+
             elif tab_name == 'Job Expenses':
                 currency_cols = ['Est. Expenses', 'Actual Expenses']
                 percent_cols = ['Percent Complete']
@@ -860,6 +959,94 @@ class ProExcelMergerApp:
                     pass
             adjusted_width = (max_length + 2)
             ws.column_dimensions[column].width = adjusted_width
+
+    def _create_dashboard(self, wb, dfs):
+        import matplotlib.pyplot as plt
+        import os
+        import tempfile
+        from openpyxl.drawing.image import Image
+
+        if 'Job Summary' not in dfs or dfs['Job Summary'].empty:
+            return # Cannot create dashboard without summary data
+
+        df_summary = dfs['Job Summary'].copy()
+        ws = wb['Dashboard']
+        temp_dir = tempfile.gettempdir()
+
+        # --- 1. Data Aggregation by Project Manager ---
+        pm_summary = df_summary.groupby('Project Manager').agg(
+            Total_Revenue=('Amt Billed', 'sum'),
+            Total_Actual_Expenses=('Actual Expenses', 'sum'),
+            Job_Count=('Job ID', 'count')
+        ).reset_index()
+
+        pm_summary['Profitability'] = (pm_summary['Total_Revenue'] - pm_summary['Total_Actual_Expenses']) / pm_summary['Total_Revenue']
+        pm_summary['Profitability'] = pm_summary['Profitability'].fillna(0)
+
+        # --- Chart Style ---
+        plt.style.use('seaborn-v0_8-whitegrid')
+        chart_files = []
+
+        # --- 2. Create PM Charts ---
+        # Chart 2a: Total Revenue by PM
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.bar(pm_summary['Project Manager'], pm_summary['Total_Revenue'], color='#4c72b0')
+        ax.set_ylabel('Total Revenue ($)')
+        ax.set_title('Total Revenue by Project Manager')
+        plt.xticks(rotation=45, ha="right")
+        plt.tight_layout()
+        fname = os.path.join(temp_dir, "chart_pm_revenue.png")
+        plt.savefig(fname)
+        chart_files.append(fname)
+        ws.add_image(Image(fname), 'A1')
+        plt.close(fig)
+
+        # Chart 2b: Profitability by PM
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.bar(pm_summary['Project Manager'], pm_summary['Profitability'], color='#55a868')
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
+        ax.set_ylabel('Profitability (%)')
+        ax.set_title('Profitability by Project Manager')
+        plt.xticks(rotation=45, ha="right")
+        plt.tight_layout()
+        fname = os.path.join(temp_dir, "chart_pm_profit.png")
+        plt.savefig(fname)
+        chart_files.append(fname)
+        ws.add_image(Image(fname), 'J1')
+        plt.close(fig)
+
+        # Chart 2c: Job Count by PM
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.bar(pm_summary['Project Manager'], pm_summary['Job_Count'], color='#c44e52')
+        ax.set_ylabel('Number of Jobs')
+        ax.set_title('Number of Jobs by Project Manager')
+        plt.xticks(rotation=45, ha="right")
+        plt.tight_layout()
+        fname = os.path.join(temp_dir, "chart_pm_jobs.png")
+        plt.savefig(fname)
+        chart_files.append(fname)
+        ws.add_image(Image(fname), 'A25')
+        plt.close(fig)
+
+        # --- 3. Project Health Status Pie Chart ---
+        with np.errstate(divide='ignore', invalid='ignore'):
+            billed_pct = df_summary['Amt Billed'] / df_summary['Contract Amount']
+            cost_pct = df_summary['Actual Expenses'] / df_summary['Estimated Expenses']
+        df_summary['Status'] = np.where(billed_pct > cost_pct, 'Red', 'Green')
+        health_counts = df_summary['Status'].value_counts()
+
+        fig, ax = plt.subplots(figsize=(5, 5))
+        ax.pie(health_counts, labels=health_counts.index, autopct='%1.1f%%', startangle=90, colors=['#c44e52', '#55a868'])
+        ax.set_title('Project Health Status (Billing vs. Cost %)')
+        plt.tight_layout()
+        fname = os.path.join(temp_dir, "chart_health_pie.png")
+        plt.savefig(fname)
+        chart_files.append(fname)
+        ws.add_image(Image(fname), 'J25')
+        plt.close(fig)
+
+        # --- 5. Return temporary image files for cleanup ---
+        return chart_files
 
 
 if __name__ == "__main__":
