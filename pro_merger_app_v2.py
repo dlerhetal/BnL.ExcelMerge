@@ -22,6 +22,7 @@ class ProExcelMergerApp:
         self.job_ledger_path = tk.StringVar()
         self.job_estimates_path = tk.StringVar()
         self.output_file_path = tk.StringVar()
+        self.template_path = tk.StringVar()
 
         self.config_file = 'merger_config_v2.json'
         self.version = "2.0.5"
@@ -97,16 +98,33 @@ class ProExcelMergerApp:
         tk.Label(self.main_frame, text="Output File:").grid(row=row_num, column=0, padx=5, pady=5, sticky='w')
         tk.Entry(self.main_frame, textvariable=self.output_file_path, width=50, state='readonly').grid(row=row_num, column=1, padx=5, pady=5)
         tk.Button(self.main_frame, text="Browse...", command=self.browse_output_file).grid(row=row_num, column=2, padx=5, pady=5)
+        row_num += 1
+
+        # Template file
+        tk.Label(self.main_frame, text="Template File:").grid(row=row_num, column=0, padx=5, pady=5, sticky='w')
+        tk.Entry(self.main_frame, textvariable=self.template_path, width=50, state='readonly').grid(row=row_num, column=1, padx=5, pady=5)
+        tk.Button(self.main_frame, text="Browse...", command=self.browse_template_file).grid(row=row_num, column=2, padx=5, pady=5)
+
 
         # Go button
         self.go_button = tk.Button(root, text="Go", command=self.go_process, state=tk.DISABLED)
         self.go_button.pack(pady=10)
+
+    def browse_template_file(self):
+        filename = filedialog.askopenfilename(
+            title="Select ProMerger Template",
+            filetypes=[("Excel Macro-Enabled Template", "*.xlsm"), ("All files", "*.*")]
+        )
+        if filename:
+            self.template_path.set(filename)
+            self.check_inputs()
 
     def create_menu(self):
         self.menubar = tk.Menu(self.root)
         
         self.filemenu = tk.Menu(self.menubar, tearoff=0)
         self.filemenu.add_command(label="Select Logo", command=self.select_logo_config)
+        self.filemenu.add_command(label="Select Template", command=self.browse_template_file)
         self.filemenu.add_command(label="Configure Columns", command=self.open_column_config)
         self.filemenu.add_separator()
         self.filemenu.add_command(label="Exit", command=self.root.quit)
@@ -413,6 +431,7 @@ class ProExcelMergerApp:
             self.job_master_path.get() and
             self.job_ledger_path.get() and
             self.job_estimates_path.get() and
+            self.template_path.get() and
             self.output_file_path.get()):
             self.go_button.config(state=tk.NORMAL)
             # self.filemenu.entryconfig("Configure Columns", state=tk.NORMAL) # Disabled for now
@@ -637,7 +656,7 @@ class ProExcelMergerApp:
 
     def save_report(self, output_path, dfs):
         # Load the template
-        template_path = "ProMerger_Template.xlsm"
+        template_path = self.template_path.get()
         try:
             wb = load_workbook(template_path, keep_vba=True)
         except FileNotFoundError:
